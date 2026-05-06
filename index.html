@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Aria â Personal AI Assistant</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-authentication-library/2.38.3/msal-browser.min.js"></script>
-<script src="config.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -220,7 +219,7 @@
 
 <script>
 // ââ Config (injected from config.js) ââ
-const CFG = typeof ARIA_CONFIG !== 'undefined' ? ARIA_CONFIG : { clientId: '', tenantId: '' };
+const CFG = { clientId: '20f2158b-7ca7-4ecd-bdce-0ec7ddb668e1', tenantId: 'consumers' };
 
 const SCOPES = ['User.Read','Mail.ReadWrite','Mail.Send','Calendars.ReadWrite','Chat.ReadWrite','Files.ReadWrite.All','Sites.ReadWrite.All'];
 
