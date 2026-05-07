@@ -69,17 +69,33 @@ function onLoggedIn(){apiKey=localStorage.getItem("aria_key")||"";fetch("https:/
 function saveKey(){var k=document.getElementById("apikey").value.trim();if(k.indexOf("sk-")!==0){alert("Please enter a valid Anthropic API key.");return;}apiKey=k;localStorage.setItem("aria_key",k);showScreen("app");document.getElementById("inp").focus();}
 function getM365Context(txt,cb){
   var lower=txt.toLowerCase();
-  if(lower.includes("calendar")||lower.includes("meeting")||lower.includes("schedule")||lower.includes("today")||lower.includes("appointment")){
-    var now=new Date().toISOString(),end=new Date(Date.now()+86400000).toISOString();
-    fetch("https://graph.microsoft.com/v1.0/me/calendarview?startDateTime="+now+"&endDateTime="+end+"&$top=10&$select=subject,start,end,location",{headers:{Authorization:"Bearer "+accessToken}}).then(function(r){return r.json();}).then(function(d){
-      if(!d.value||d.value.length===0){cb("Your Microsoft 365 calendar is empty today - no events scheduled.");return;}
-      cb("Your calendar today (LIVE): "+d.value.map(function(e){return e.subject+" at "+new Date(e.start.dateTime).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+(e.location&&e.location.displayName?" @ "+e.location.displayName:"");}).join("; "));
-    }).catch(function(){cb("");});
-  } else if(lower.includes("email")||lower.includes("inbox")||lower.includes("mail")){
-    fetch("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=5&$select=subject,from,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc",{headers:{Authorization:"Bearer "+accessToken}}).then(function(r){return r.json();}).then(function(d){
-      if(!d.value||d.value.length===0){cb("No emails found in inbox.");return;}
-      cb("Your inbox (LIVE, latest 5): "+d.value.map(function(e){return(e.isRead?"":"[UNREAD] ")+e.subject+" from "+e.from.emailAddress.address+" - "+e.bodyPreview.slice(0,80);}).join(" || "));
-    }).catch(function(){cb("");});
+  if(lower.includes("calendar")||lower.includes("meeting")||lower.includes("schedule")||lower.includes("today")||lower.includes("tomorrow")||lower.includes("week")||lower.includes("month")||lower.includes("appointment")||lower.includes("event")){
+    // Fetch 60 days of calendar so Aria can answer any date question
+    var start=new Date();start.setHours(0,0,0,0);
+    var end=new Date(start.getTime()+(60*86400000));
+    fetch("https://graph.microsoft.com/v1.0/me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=subject,start,end,location,organizer,attendees&$orderby=start/dateTime",{headers:{Authorization:"Bearer "+accessToken,"Prefer":"outlook.timezone=\"UTC\""}})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.value||d.value.length===0){cb("LIVE CALENDAR DATA: No events found in the next 60 days. Calendar is completely empty.");return;}
+      var events=d.value.map(function(e){
+        var dt=new Date(e.start.dateTime+"Z");
+        var dtEnd=new Date(e.end.dateTime+"Z");
+        var dateStr=dt.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"});
+        var timeStr=dt.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+dtEnd.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
+        return dateStr+" | "+timeStr+" | "+e.subject+(e.location&&e.location.displayName?" @ "+e.location.displayName:"");
+      }).join("\n");
+      cb("LIVE CALENDAR DATA (next 60 days, "+d.value.length+" events):\n"+events);
+    }).catch(function(e){cb("Calendar fetch error: "+e.message);});
+  } else if(lower.includes("email")||lower.includes("inbox")||lower.includes("mail")||lower.includes("message")||lower.includes("unread")){
+    fetch("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=10&$select=subject,from,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc",{headers:{Authorization:"Bearer "+accessToken}})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.value||d.value.length===0){cb("LIVE EMAIL DATA: Inbox is empty.");return;}
+      cb("LIVE EMAIL DATA (latest 10): "+d.value.map(function(e){
+        var dt=new Date(e.receivedDateTime).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+        return(e.isRead?"":"[UNREAD] ")+e.subject+" | from: "+e.from.emailAddress.address+" | "+dt+" | "+e.bodyPreview.slice(0,120);
+      }).join("\n"));
+    }).catch(function(e){cb("Email fetch error: "+e.message);});
   } else { cb(""); }
 }
 function sendMsg(){var inp=document.getElementById("inp");var txt=inp.value.trim();if(!txt||busy)return;inp.value="";inp.style.height="auto";busy=true;document.getElementById("sbtn").disabled=true;var empty=document.getElementById("empty");if(empty)empty.remove();addMsg("u",txt);hist.push({role:"user",content:txt});var tid=showTyping();
