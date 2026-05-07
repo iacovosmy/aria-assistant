@@ -6,68 +6,60 @@
 <title>Aria - Personal AI Assistant</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-authentication-library/2.38.3/msal-browser.min.js"></script>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; background: #f0f0f0; font-family: -apple-system, sans-serif; }
-  
-  /* LOGIN */
-  #login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-  .card { background: #fff; border-radius: 20px; padding: 48px 40px; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
-  .icon { width: 64px; height: 64px; border-radius: 18px; background: linear-gradient(135deg,#1a6b3c,#2d9b5a); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 28px; }
-  h1 { font-size: 24px; font-weight: 700; color: #111; margin-bottom: 10px; }
-  .sub { color: #666; line-height: 1.6; margin-bottom: 30px; }
-  .ms-btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; padding: 14px; background: #0078d4; color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; }
-  .ms-btn:hover { background: #006cbe; }
-  #status { margin-top: 14px; font-size: 13px; color: #666; min-height: 18px; }
-  .note { font-size: 12px; color: #999; margin-top: 14px; }
-
-  /* API KEY */
-  #apiscreen { display: none; min-height: 100vh; align-items: center; justify-content: center; padding: 20px; }
-  #apiscreen.on { display: flex; }
-
-  /* APP */
-  #app { display: none; flex-direction: column; height: 100vh; background: #f7f6f3; }
-  #app.on { display: flex; }
-  #topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: #fff; border-bottom: 1px solid #eee; flex-shrink: 0; }
-  .tl { display: flex; align-items: center; gap: 10px; }
-  .av-sm { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg,#1a6b3c,#2d9b5a); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 700; }
-  .appname { font-weight: 700; font-size: 15px; }
-  .live { background: #e8f5ee; color: #1a6b3c; font-size: 11px; padding: 3px 8px; border-radius: 20px; font-weight: 600; }
-  .signout { background: #f0eee9; border: none; border-radius: 20px; padding: 5px 14px; font-size: 12px; cursor: pointer; font-family: inherit; color: #555; }
-  #msgs { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-  .row { display: flex; gap: 8px; animation: up 0.2s ease; }
-  .row.u { flex-direction: row-reverse; }
-  @keyframes up { from { opacity:0; transform:translateY(5px); } to { opacity:1; } }
-  .mav { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
-  .mav.a { background: linear-gradient(135deg,#1a6b3c,#2d9b5a); color: #fff; }
-  .mav.u { background: #e8e6e1; color: #666; }
-  .bub { padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.65; max-width: 76%; }
-  .row.a .bub { background: #fff; border: 1px solid #eee; border-top-left-radius: 4px; }
-  .row.u .bub { background: #1a1916; color: #f7f6f3; border-top-right-radius: 4px; }
-  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 40px; }
-  .eicon { width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg,#1a6b3c,#2d9b5a); display: flex; align-items: center; justify-content: center; font-size: 24px; margin: 0 auto 16px; }
-  .etitle { font-size: 20px; font-weight: 700; margin-bottom: 8px; color: #111; }
-  .esub { color: #666; line-height: 1.6; max-width: 300px; }
-  #iarea { padding: 12px 20px 28px; background: #f7f6f3; flex-shrink: 0; }
-  #irow { display: flex; align-items: flex-end; gap: 8px; background: #fff; border: 1.5px solid #ddd; border-radius: 18px; padding: 8px 8px 8px 16px; }
-  #inp { flex: 1; border: none; outline: none; font-size: 15px; font-family: inherit; resize: none; min-height: 24px; max-height: 100px; background: transparent; color: #1a1916; }
-  #inp::placeholder { color: #aaa; }
-  #sbtn { width: 36px; height: 36px; border-radius: 50%; border: none; background: #1a6b3c; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: opacity 0.15s; }
-  #sbtn:disabled { opacity: 0.35; cursor: not-allowed; }
-  .tdots { display: flex; gap: 4px; padding: 6px 2px; }
-  .tdot { width: 6px; height: 6px; border-radius: 50%; background: #bbb; animation: td 1.2s ease-in-out infinite; }
-  .tdot:nth-child(2){animation-delay:.2s} .tdot:nth-child(3){animation-delay:.4s}
-  @keyframes td { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #f0f0f0; font-family: -apple-system, sans-serif; }
+#login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.card { background: #fff; border-radius: 20px; padding: 48px 40px; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+.icon { width: 64px; height: 64px; border-radius: 18px; background: linear-gradient(135deg,#1a6b3c,#2d9b5a); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 28px; }
+h1 { font-size: 24px; font-weight: 700; color: #111; margin-bottom: 10px; }
+.sub { color: #666; line-height: 1.6; margin-bottom: 30px; }
+.ms-btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; padding: 14px; background: #0078d4; color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.ms-btn:hover { background: #006cbe; }
+#status { margin-top: 14px; font-size: 13px; color: #666; min-height: 18px; }
+.note { font-size: 12px; color: #999; margin-top: 14px; }
+#apiscreen { display: none; min-height: 100vh; align-items: center; justify-content: center; padding: 20px; }
+#apiscreen.on { display: flex; }
+#app { display: none; flex-direction: column; height: 100vh; background: #f7f6f3; }
+#app.on { display: flex; }
+#topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: #fff; border-bottom: 1px solid #eee; flex-shrink: 0; }
+.tl { display: flex; align-items: center; gap: 10px; }
+.av-sm { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg,#1a6b3c,#2d9b5a); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 700; }
+.appname { font-weight: 700; font-size: 15px; }
+.live { background: #e8f5ee; color: #1a6b3c; font-size: 11px; padding: 3px 8px; border-radius: 20px; font-weight: 600; }
+.signout { background: #f0eee9; border: none; border-radius: 20px; padding: 5px 14px; font-size: 12px; cursor: pointer; font-family: inherit; color: #555; }
+#msgs { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.row { display: flex; gap: 8px; }
+.row.u { flex-direction: row-reverse; }
+.mav { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
+.mav.a { background: linear-gradient(135deg,#1a6b3c,#2d9b5a); color: #fff; }
+.mav.u { background: #e8e6e1; color: #666; }
+.bub { padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.65; max-width: 76%; }
+.row.a .bub { background: #fff; border: 1px solid #eee; border-top-left-radius: 4px; }
+.row.u .bub { background: #1a1916; color: #f7f6f3; border-top-right-radius: 4px; }
+.empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 40px; }
+.eicon { width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg,#1a6b3c,#2d9b5a); display: flex; align-items: center; justify-content: center; font-size: 24px; margin: 0 auto 16px; }
+.etitle { font-size: 20px; font-weight: 700; margin-bottom: 8px; color: #111; }
+.esub { color: #666; line-height: 1.6; max-width: 300px; }
+#iarea { padding: 12px 20px 28px; background: #f7f6f3; flex-shrink: 0; }
+#irow { display: flex; align-items: flex-end; gap: 8px; background: #fff; border: 1.5px solid #ddd; border-radius: 18px; padding: 8px 8px 8px 16px; }
+#inp { flex: 1; border: none; outline: none; font-size: 15px; font-family: inherit; resize: none; min-height: 24px; max-height: 100px; background: transparent; color: #1a1916; }
+#inp::placeholder { color: #aaa; }
+#sbtn { width: 36px; height: 36px; border-radius: 50%; border: none; background: #1a6b3c; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+#sbtn:disabled { opacity: 0.35; }
+.tdots { display: flex; gap: 4px; padding: 6px 2px; }
+.tdot { width: 6px; height: 6px; border-radius: 50%; background: #bbb; animation: td 1.2s ease-in-out infinite; }
+.tdot:nth-child(2){animation-delay:.2s} .tdot:nth-child(3){animation-delay:.4s}
+@keyframes td { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
 </style>
 </head>
 <body>
 
-<!-- LOGIN SCREEN -->
 <div id="login">
   <div class="card">
     <div class="icon">&#10022;</div>
     <h1>Welcome to Aria</h1>
     <p class="sub">Your personal Microsoft 365 AI assistant.<br>Sign in to get started.</p>
-    <button class="ms-btn" onclick="doSignIn()">
+    <button class="ms-btn" id="signInBtn">
       <svg width="20" height="20" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
         <rect x="1" y="1" width="9" height="9" fill="#F25022"/>
         <rect x="11" y="1" width="9" height="9" fill="#7FBA00"/>
@@ -81,188 +73,166 @@
   </div>
 </div>
 
-<!-- API KEY SCREEN -->
 <div id="apiscreen">
   <div class="card">
     <div class="icon">&#9881;</div>
     <h1>One-time setup</h1>
-    <p class="sub">Enter your Anthropic API key to power Aria's AI.</p>
+    <p class="sub">Enter your Anthropic API key to power Aria.</p>
     <input id="apikey" type="password" placeholder="sk-ant-..." style="width:100%;padding:11px 14px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;font-family:inherit;margin-bottom:12px;outline:none;display:block">
-    <button onclick="saveKey()" style="width:100%;padding:13px;background:#1a6b3c;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit">Save &amp; Start Aria</button>
-    <p style="font-size:12px;color:#999;margin-top:12px">Get your key at console.anthropic.com &#8594; API Keys</p>
+    <button id="saveKeyBtn" style="width:100%;padding:13px;background:#1a6b3c;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit">Save &amp; Start Aria</button>
+    <p style="font-size:12px;color:#999;margin-top:12px">Get your key at console.anthropic.com</p>
   </div>
 </div>
 
-<!-- MAIN APP -->
 <div id="app">
   <div id="topbar">
-    <div class="tl">
-      <div class="av-sm">Ar</div>
-      <span class="appname">Aria</span>
-    </div>
+    <div class="tl"><div class="av-sm">Ar</div><span class="appname">Aria</span></div>
     <div style="display:flex;align-items:center;gap:8px">
       <span class="live">M365 Live</span>
-      <button class="signout" id="userbtn" onclick="doSignOut()">Sign out</button>
+      <button class="signout" id="userbtn">Sign out</button>
     </div>
   </div>
   <div id="msgs">
     <div class="empty" id="empty">
       <div class="eicon">&#10022;</div>
       <div class="etitle" id="greeting">Good to see you.</div>
-      <p class="esub">Ask me about your emails, calendar, Teams messages, or OneDrive files.</p>
+      <p class="esub">Ask me about your emails, calendar, Teams, or OneDrive files.</p>
     </div>
   </div>
   <div id="iarea">
     <div id="irow">
-      <textarea id="inp" placeholder="Ask Aria anything..." rows="1" onkeydown="onKey(event)" oninput="resize(this)"></textarea>
-      <button id="sbtn" onclick="send()">
-        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="10" y1="16" x2="10" y2="4"/><polyline points="5,9 10,4 15,9"/>
-        </svg>
-      </button>
+      <textarea id="inp" placeholder="Ask Aria anything..." rows="1"></textarea>
+      <button id="sbtn"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="16" x2="10" y2="4"/><polyline points="5,9 10,4 15,9"/></svg></button>
     </div>
   </div>
 </div>
 
 <script>
-const CLIENT_ID = '20f2158b-7ca7-4ecd-bdce-0ec7ddb668e1';
-const SCOPES = ['User.Read','Mail.ReadWrite','Mail.Send','Calendars.ReadWrite','Files.ReadWrite.All'];
+var CLIENT_ID = "20f2158b-7ca7-4ecd-bdce-0ec7ddb668e1";
+var SCOPES = ["User.Read","Mail.ReadWrite","Mail.Send","Calendars.ReadWrite","Files.ReadWrite.All"];
+var msalApp, apiKey = "", hist = [], busy = false, userName = "there", userInitial = "Y";
 
-let msalApp, apiKey = '', hist = [], busy = false, userName = 'there', userInitial = 'Y';
+function setStatus(msg) { document.getElementById("status").textContent = msg; }
 
-function show(id) {
-  ['login','apiscreen','app'].forEach(s => {
-    const el = document.getElementById(s);
-    if (s === 'apiscreen') { el.classList.toggle('on', s === id); }
-    else if (s === 'app') { el.classList.toggle('on', s === id); }
-    else { el.style.display = s === id ? 'flex' : 'none'; }
-  });
+function showScreen(id) {
+  document.getElementById("login").style.display = id === "login" ? "flex" : "none";
+  document.getElementById("apiscreen").className = id === "apiscreen" ? "on" : "";
+  document.getElementById("app").className = id === "app" ? "on" : "";
 }
 
-function status(msg) { document.getElementById('status').textContent = msg; }
-
-window.onload = async function() {
-  apiKey = localStorage.getItem('aria_key') || '';
-  
+window.onload = function() {
+  apiKey = localStorage.getItem("aria_key") || "";
   msalApp = new msal.PublicClientApplication({
-    auth: {
-      clientId: CLIENT_ID,
-      authority: 'https://login.microsoftonline.com/consumers',
-      redirectUri: location.origin + location.pathname
-    },
-    cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
+    auth: { clientId: CLIENT_ID, authority: "https://login.microsoftonline.com/consumers", redirectUri: location.origin + location.pathname },
+    cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true }
   });
-
-  try {
-    const result = await msalApp.handleRedirectPromise();
-    if (result && result.account) { await loggedIn(result.account); return; }
-  } catch(e) { status('Init error: ' + e.message); return; }
-
-  const accounts = msalApp.getAllAccounts();
-  if (accounts.length > 0) { await loggedIn(accounts[0]); return; }
-  
-  show('login');
+  document.getElementById("signInBtn").addEventListener("click", doSignIn);
+  document.getElementById("saveKeyBtn").addEventListener("click", saveKey);
+  document.getElementById("userbtn").addEventListener("click", doSignOut);
+  document.getElementById("sbtn").addEventListener("click", sendMsg);
+  document.getElementById("inp").addEventListener("keydown", function(e){ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();} });
+  document.getElementById("inp").addEventListener("input", function(){ this.style.height="auto"; this.style.height=Math.min(this.scrollHeight,100)+"px"; });
+  msalApp.handleRedirectPromise().then(function(result) {
+    if (result && result.account) { loggedIn(result.account); return; }
+    var accounts = msalApp.getAllAccounts();
+    if (accounts.length > 0) { loggedIn(accounts[0]); return; }
+    showScreen("login");
+  }).catch(function(e) { setStatus("Error: " + e.message); showScreen("login"); });
 };
 
-async function doSignIn() {
-  status('Redirecting to Microsoft...');
-  try { await msalApp.loginRedirect({ scopes: SCOPES, prompt: 'select_account' }); }
-  catch(e) { status('Error: ' + e.message); }
+function doSignIn() {
+  setStatus("Redirecting to Microsoft...");
+  msalApp.loginRedirect({ scopes: SCOPES, prompt: "select_account" }).catch(function(e){ setStatus("Error: " + e.message); });
 }
 
-async function doSignOut() {
-  if (!confirm('Sign out of Aria?')) return;
-  localStorage.removeItem('aria_key');
+function doSignOut() {
+  if (!confirm("Sign out of Aria?")) return;
+  localStorage.removeItem("aria_key");
   msalApp.logoutRedirect();
 }
 
-async function getToken() {
-  const accs = msalApp.getAllAccounts();
-  try {
-    const r = await msalApp.acquireTokenSilent({ scopes: SCOPES, account: accs[0] });
-    return r.accessToken;
-  } catch { await msalApp.acquireTokenRedirect({ scopes: SCOPES }); }
+function getToken(cb) {
+  var accs = msalApp.getAllAccounts();
+  msalApp.acquireTokenSilent({ scopes: SCOPES, account: accs[0] }).then(function(r){ cb(r.accessToken); }).catch(function(){ msalApp.acquireTokenRedirect({ scopes: SCOPES }); });
 }
 
-async function loggedIn(account) {
-  try {
-    const tok = await getToken();
-    const r = await fetch('https://graph.microsoft.com/v1.0/me', { headers: { Authorization: 'Bearer ' + tok } });
-    const p = await r.json();
-    userName = p.displayName || p.givenName || account.name || 'there';
-    userInitial = userName.charAt(0).toUpperCase();
-  } catch(e) { userName = account.name || 'there'; userInitial = userName.charAt(0).toUpperCase(); }
-
-  document.getElementById('userbtn').textContent = userName.split(' ')[0];
-  const h = new Date().getHours();
-  const g = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-  document.getElementById('greeting').textContent = g + ', ' + userName.split(' ')[0] + '.';
-
-  if (!apiKey) { show('apiscreen'); return; }
-  show('app');
-  document.getElementById('inp').focus();
+function loggedIn(account) {
+  getToken(function(tok) {
+    fetch("https://graph.microsoft.com/v1.0/me", { headers: { Authorization: "Bearer " + tok } })
+      .then(function(r){ return r.json(); })
+      .then(function(p) {
+        userName = p.displayName || p.givenName || account.name || "there";
+        userInitial = userName.charAt(0).toUpperCase();
+        document.getElementById("userbtn").textContent = userName.split(" ")[0];
+        var h = new Date().getHours();
+        var g = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+        document.getElementById("greeting").textContent = g + ", " + userName.split(" ")[0] + ".";
+        if (!apiKey) { showScreen("apiscreen"); return; }
+        showScreen("app");
+        document.getElementById("inp").focus();
+      }).catch(function() {
+        userName = account.name || "there"; userInitial = userName.charAt(0).toUpperCase();
+        if (!apiKey) { showScreen("apiscreen"); return; }
+        showScreen("app");
+      });
+  });
 }
 
 function saveKey() {
-  const k = document.getElementById('apikey').value.trim();
-  if (!k.startsWith('sk-')) { alert('Please enter a valid Anthropic API key (starts with sk-).'); return; }
-  apiKey = k; localStorage.setItem('aria_key', k);
-  show('app');
-  document.getElementById('inp').focus();
+  var k = document.getElementById("apikey").value.trim();
+  if (k.indexOf("sk-") !== 0) { alert("Please enter a valid Anthropic API key (starts with sk-)."); return; }
+  apiKey = k; localStorage.setItem("aria_key", k);
+  showScreen("app"); document.getElementById("inp").focus();
 }
 
-async function send() {
-  const inp = document.getElementById('inp');
-  const txt = inp.value.trim();
+function sendMsg() {
+  var inp = document.getElementById("inp");
+  var txt = inp.value.trim();
   if (!txt || busy) return;
-  inp.value = ''; inp.style.height = 'auto';
-  busy = true; document.getElementById('sbtn').disabled = true;
-  const empty = document.getElementById('empty'); if (empty) empty.remove();
-
-  addMsg('u', txt);
-  hist.push({ role: 'user', content: txt });
-  const tid = typing();
-
-  try {
-    const sys = 'You are Aria, a warm and proactive Microsoft 365 AI assistant. Today: ' + new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'}) + '. User: ' + userName + '. Help with emails, calendar, Teams, and files. For write actions always confirm first.';
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1024, system: sys, messages: hist })
-    });
-    const data = await res.json();
-    untyping(tid);
-    const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim() || 'Sorry, something went wrong.';
-    hist.push({ role: 'assistant', content: reply });
-    addMsg('a', reply);
-  } catch(e) { untyping(tid); addMsg('a', 'Error: ' + e.message); hist.pop(); }
-  busy = false; document.getElementById('sbtn').disabled = false; inp.focus();
+  inp.value = ""; inp.style.height = "auto";
+  busy = true; document.getElementById("sbtn").disabled = true;
+  var empty = document.getElementById("empty"); if (empty) empty.remove();
+  addMsg("u", txt);
+  hist.push({ role: "user", content: txt });
+  var tid = showTyping();
+  var sys = "You are Aria, a warm Microsoft 365 AI assistant. Today: " + new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"}) + ". User: " + userName + ". Help with emails, calendar, Teams, files. For write actions always confirm first.";
+  fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1024, system: sys, messages: hist })
+  }).then(function(r){ return r.json(); }).then(function(data) {
+    hideTyping(tid);
+    var reply = "";
+    if (data.content) { data.content.forEach(function(b){ if(b.type==="text") reply += b.text; }); }
+    reply = reply.trim() || "Sorry, something went wrong.";
+    hist.push({ role: "assistant", content: reply });
+    addMsg("a", reply);
+  }).catch(function(e){ hideTyping(tid); addMsg("a", "Error: " + e.message); hist.pop(); });
+  busy = false; document.getElementById("sbtn").disabled = false; inp.focus();
 }
 
 function addMsg(role, text) {
-  const msgs = document.getElementById('msgs');
-  const row = document.createElement('div'); row.className = 'row ' + role;
-  const av = document.createElement('div'); av.className = 'mav ' + role;
-  av.textContent = role === 'a' ? 'Ar' : userInitial;
-  const bub = document.createElement('div'); bub.className = 'bub';
-  bub.innerHTML = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/**(.*?)**/g,'<strong>$1</strong>').replace(/
-/g,'<br>');
+  var msgs = document.getElementById("msgs");
+  var row = document.createElement("div"); row.className = "row " + role;
+  var av = document.createElement("div"); av.className = "mav " + role;
+  av.textContent = role === "a" ? "Ar" : userInitial;
+  var bub = document.createElement("div"); bub.className = "bub";
+  var safe = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
+  bub.innerHTML = safe;
   row.appendChild(av); row.appendChild(bub); msgs.appendChild(row);
   msgs.scrollTop = msgs.scrollHeight;
 }
 
-function typing() {
-  const id = 'ty' + Date.now(), msgs = document.getElementById('msgs');
-  const row = document.createElement('div'); row.className = 'row a'; row.id = id;
-  const av = document.createElement('div'); av.className = 'mav a'; av.textContent = 'Ar';
-  const bub = document.createElement('div'); bub.className = 'bub';
-  bub.innerHTML = '<div class="tdots"><div class="tdot"></div><div class="tdot"></div><div class="tdot"></div></div>';
+function showTyping() {
+  var id = "ty" + Date.now(), msgs = document.getElementById("msgs");
+  var row = document.createElement("div"); row.className = "row a"; row.id = id;
+  var av = document.createElement("div"); av.className = "mav a"; av.textContent = "Ar";
+  var bub = document.createElement("div"); bub.className = "bub";
+  bub.innerHTML = "<div class=\"tdots\"><div class=\"tdot\"></div><div class=\"tdot\"></div><div class=\"tdot\"></div></div>";
   row.appendChild(av); row.appendChild(bub); msgs.appendChild(row);
   msgs.scrollTop = msgs.scrollHeight; return id;
 }
-function untyping(id) { const el = document.getElementById(id); if(el) el.remove(); }
-function onKey(e) { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} }
-function resize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,100)+'px'; }
+function hideTyping(id) { var el = document.getElementById(id); if(el) el.remove(); }
 </script>
 </body>
 </html>
