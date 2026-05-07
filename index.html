@@ -205,7 +205,25 @@ function sendMsg() {
   addMsg("u", txt);
   hist.push({ role: "user", content: txt });
   var tid = showTyping();
-  var sys = "You are Aria, a warm Microsoft 365 AI assistant. Today: " + new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"}) + ". User: " + userName + ". Help with emails, calendar, Teams, files.";
+  // Fetch live M365 context based on query
+  var ctxPromise = Promise.resolve("");
+  var lower = txt.toLowerCase();
+  if (lower.includes("calendar") || lower.includes("meeting") || lower.includes("schedule") || lower.includes("today") || lower.includes("appointment")) {
+    var now = new Date().toISOString();
+    var end = new Date(Date.now() + 86400000).toISOString();
+    ctxPromise = fetch("https://graph.microsoft.com/v1.0/me/calendarview?startDateTime=" + now + "&endDateTime=" + end + "&$top=10&$select=subject,start,end,organizer,location", { headers: { Authorization: "Bearer " + accessToken } }).then(function(r){return r.json();}).then(function(d){
+      if (!d.value || d.value.length === 0) return "Calendar context: No events today.";
+      return "Calendar context (LIVE DATA): " + d.value.map(function(e){ return e.subject + " at " + new Date(e.start.dateTime).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"}) + (e.location && e.location.displayName ? " @ " + e.location.displayName : ""); }).join("; ");
+    }).catch(function(){ return ""; });
+  } else if (lower.includes("email") || lower.includes("inbox") || lower.includes("mail") || lower.includes("message")) {
+    ctxPromise = fetch("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=5&$select=subject,from,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc", { headers: { Authorization: "Bearer " + accessToken } }).then(function(r){return r.json();}).then(function(d){
+      if (!d.value || d.value.length === 0) return "Email context: No emails found.";
+      return "Email context (LIVE DATA): " + d.value.map(function(e){ return (e.isRead?"":"[UNREAD] ") + e.subject + " from " + e.from.emailAddress.address + ": " + e.bodyPreview.slice(0,100); }).join(" | ");
+    }).catch(function(){ return ""; });
+  }
+  ctxPromise.then(function(ctx) {
+  var sys = "You are Aria, a warm, proactive personal Microsoft 365 AI assistant. Today: " + new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"}) + ". User: " + userName + ". You have LIVE access to Microsoft 365. " + (ctx ? ctx + ". Use this real data to answer the user directly and specifically." : "Help with emails, calendar, Teams, files.");
+  }).catch(function(){});
   fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
