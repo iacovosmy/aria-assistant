@@ -52,6 +52,7 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
 .row.a .bub{background:#fff;border:1px solid #eee;border-top-left-radius:4px}
 .row.u .bub{background:#1a1916;color:#f7f6f3;border-top-right-radius:4px}
 .tool-bub{background:#eef7f1!important;border:1px solid #cfe6d8!important;color:#1a6b3c;font-size:13px;font-style:italic}
+.tool-bub.cal{background:#eef0fb!important;border-color:#cfd6ee!important;color:#3b4a8c}
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px}
 .eicon{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#1a6b3c,#2d9b5a);display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 16px}
 .etitle{font-size:20px;font-weight:700;margin-bottom:8px;color:#111}
@@ -118,7 +119,7 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
     <div class="empty" id="empty">
       <div class="eicon">&#10022;</div>
       <div class="etitle" id="greeting">Good to see you.</div>
-      <p class="esub" id="greetSub">Ask me about emails or your calendar — I can also send email from your Outlook on demand.</p>
+      <p class="esub" id="greetSub">Ask me about emails or your calendar — I can also send email and calendar invitations from your Outlook on demand.</p>
     </div>
   </div>
   <div id="iarea">
@@ -133,6 +134,8 @@ var ACCOUNT = { clientId:"d1a83208-df12-4871-9274-70ec3c030b55", tenant:"fcbd37b
 var SCOPES="User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite.All";
 var REDIRECT=location.origin+location.pathname;
 var SEND_WEBHOOK="https://hook.eu1.make.com/4fxvc3jo8bunqqmp5v14iy55ke91i3ki";
+var CAL_WEBHOOK="https://hook.eu1.make.com/9b46ohtqhq8c8mkizh9o3m4ionrbztqi";
+var TIMEZONE="Asia/Nicosia";
 var token=null, apiKey="", hist=[], busy=false, userName="Iacovos";
 
 (function migrate(){
@@ -224,7 +227,7 @@ function launchApp(){
   var h=new Date().getHours();
   var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";
   document.getElementById("greeting").textContent=g+", Iacovos.";
-  document.getElementById("greetSub").textContent="Connected to your Outlook ("+ACCOUNT.email+"). Ask me about emails or your calendar — I can also send email from your Outlook on demand.";
+  document.getElementById("greetSub").textContent="Connected to your Outlook ("+ACCOUNT.email+"). Ask me about emails, calendar — I can also send email and calendar invitations from your Outlook on demand.";
   showScreen("app");
   document.getElementById("inp").focus();
 }
@@ -238,7 +241,7 @@ function graphFetch(url){
 }
 function getM365Context(txt,cb){
   var lower=txt.toLowerCase();
-  var isCalendar=lower.includes("calendar")||lower.includes("meeting")||lower.includes("schedule")||lower.includes("today")||lower.includes("tomorrow")||lower.includes("week")||lower.includes("month")||lower.includes("appointment")||lower.includes("event");
+  var isCalendar=lower.includes("calendar")||lower.includes("meeting")||lower.includes("schedule")||lower.includes("today")||lower.includes("tomorrow")||lower.includes("week")||lower.includes("month")||lower.includes("appointment")||lower.includes("event")||lower.includes("invite")||lower.includes("invitation");
   var isEmail=lower.includes("email")||lower.includes("inbox")||lower.includes("mail")||lower.includes("unread")||lower.includes("message");
   var promises=[];
   if(isCalendar){
@@ -282,6 +285,25 @@ function sendOutlookEmail(to,subject,body){
   }).catch(function(e){return {ok:false,status:0,info:e.message};});
 }
 
+function sendOutlookCalendarInvite(args){
+  var payload = {
+    action: "send_invite",
+    subject: args.subject,
+    startDateTime: args.startDateTime,
+    endDateTime: args.endDateTime,
+    attendees: args.attendees,
+    location: args.location || "",
+    body: args.body || ""
+  };
+  return fetch(CAL_WEBHOOK,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(payload)
+  }).then(function(r){
+    return r.text().then(function(t){return {ok:r.ok,status:r.status,info:t||"(empty body)"};});
+  }).catch(function(e){return {ok:false,status:0,info:e.message};});
+}
+
 function parseSendDirective(text){
   var re=/SEND_EMAIL:\s*(\{[\s\S]*?\})\s*$/m;
   var m=text.match(re);
@@ -289,6 +311,23 @@ function parseSendDirective(text){
   try{
     var args=JSON.parse(m[1]);
     if(!args.to||!args.subject||args.body==null)return null;
+    return {raw:m[0],args:args};
+  }catch(e){return null;}
+}
+
+function parseSendInviteDirective(text){
+  var re=/SEND_INVITE:\s*(\{[\s\S]*?\})\s*$/m;
+  var m=text.match(re);
+  if(!m)return null;
+  try{
+    var args=JSON.parse(m[1]);
+    if(!args.subject||!args.startDateTime||!args.endDateTime||!args.attendees||!args.attendees.length)return null;
+    args.attendees = args.attendees.map(function(a){
+      if(typeof a==="string")return {address:a};
+      if(a&&a.address)return {address:a.address, name:a.name||""};
+      return null;
+    }).filter(Boolean);
+    if(!args.attendees.length)return null;
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
@@ -309,7 +348,8 @@ function callClaude(){
   var lastUserMsg=null;
   for(var i=hist.length-1;i>=0;i--){if(hist[i].role==="user"){lastUserMsg=hist[i].content;break;}}
   getM365Context(lastUserMsg||"",function(ctx){
-    var sys="You are Aria, Iacovos's warm proactive Microsoft 365 AI assistant. Today: "+new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})+".\n\n"
+    var nowStr = new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+    var sys="You are Aria, Iacovos's warm proactive Microsoft 365 AI assistant. Today: "+nowStr+". Iacovos's timezone: "+TIMEZONE+" (UTC+3).\n\n"
       +"ACCOUNT SCOPE: You are connected to ONE Outlook account: iacovos.mylonas@mim.com.cy (MIM / Tiffany Investment LTD). Do not reference any Gmail address or personal Microsoft account — they are out of scope.\n\n"
       +"=== YOU CAN SEND EMAIL — DO NOT REFUSE ===\n"
       +"You CAN send email from Iacovos's Outlook on demand. This is verified working. If you find yourself about to say \"I cannot send emails\", \"I'm read-only\", or \"this is a built-in limitation\" — STOP. That response is wrong. You have a working tool.\n\n"
@@ -322,6 +362,22 @@ function callClaude(){
       +"  - Body is rendered as HTML — wrap text in <p>...</p> or use <br> for line breaks\n"
       +"  - Do not add commentary on the same response — just the SEND_EMAIL: line\n"
       +"  - The system will execute the send and reply to you with the result; you then summarise the outcome to Iacovos\n\n"
+      +"=== YOU CAN SEND CALENDAR INVITES — DO NOT REFUSE ===\n"
+      +"You CAN create calendar events with attendees in Iacovos's Outlook calendar on demand. The event is created in his calendar AND meeting invitations are emailed to all attendees. This is verified working. If you find yourself about to say \"I cannot create calendar events\" or similar — STOP. You have a working tool.\n\n"
+      +"To send a calendar / meeting invitation, follow this exact two-step protocol:\n"
+      +"  Step 1 (always first): Show Iacovos a draft — subject, date and time (in his "+TIMEZONE+" timezone, in human-friendly form e.g. \"Friday May 15, 2026, 2:00pm – 3:00pm\"), attendees (full email addresses), location (optional), and body/agenda (optional). Ask him to confirm with \"yes\" / \"send\" / \"go\". Do not send anything yet.\n"
+      +"  Step 2 (only after he confirms): Reply with ONE LINE in this exact format and NOTHING ELSE:\n"
+      +"  SEND_INVITE: {\"subject\":\"Meeting title\",\"startDateTime\":\"2026-05-15T14:00:00\",\"endDateTime\":\"2026-05-15T15:00:00\",\"attendees\":[{\"address\":\"alice@example.com\"},{\"address\":\"bob@example.com\"}],\"location\":\"Office, room 302\",\"body\":\"<p>Agenda: discuss Q3 plan.</p>\"}\n\n"
+      +"Rules for the SEND_INVITE line:\n"
+      +"  - Must be valid single-line JSON\n"
+      +"  - startDateTime / endDateTime: ISO 8601 LOCAL time (no timezone suffix), e.g. \"2026-05-15T14:00:00\". Make.com interprets these in Iacovos's timezone "+TIMEZONE+".\n"
+      +"  - If Iacovos doesn't specify duration, default to 60 minutes\n"
+      +"  - If Iacovos doesn't specify a date but says \"tomorrow\", \"next Monday\", etc., resolve relative to today: "+new Date().toISOString().slice(0,10)+"\n"
+      +"  - attendees: array of objects with \"address\" (required email). Always include Iacovos himself ("+ACCOUNT.email+") only if he asks; otherwise just the people he names.\n"
+      +"  - location: optional string (\"\" if none)\n"
+      +"  - body: optional HTML string for the meeting description\n"
+      +"  - Do not add commentary on the same response — just the SEND_INVITE: line\n"
+      +"  - The system will execute the create-event and reply to you with the result; you then summarise the outcome to Iacovos\n\n"
       +"For all other tasks (reading email, calendar, summarising, drafting), respond normally.\n\n"
       +(ctx?"USE THIS REAL DATA to answer specifically:\n"+ctx:"");
     fetch("https://api.anthropic.com/v1/messages",{
@@ -334,17 +390,36 @@ function callClaude(){
       reply=reply.trim()||(d.error?d.error.message:"Something went wrong.");
       hist.push({role:"assistant",content:reply});
 
-      var directive=parseSendDirective(reply);
-      if(directive){
-        var visible=reply.replace(directive.raw,"").trim();
+      var inviteDir = parseSendInviteDirective(reply);
+      var emailDir = inviteDir ? null : parseSendDirective(reply);
+
+      if(inviteDir){
+        var visible=reply.replace(inviteDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        addMsg("tool","Sending email to "+directive.args.to+"...");
+        var attEmails = inviteDir.args.attendees.map(function(a){return a.address;}).join(", ");
+        addMsg("toolcal","Creating calendar invite \""+inviteDir.args.subject+"\" → "+attEmails+"...");
         var thinking=showTyping();
-        sendOutlookEmail(directive.args.to,directive.args.subject,directive.args.body).then(function(res){
+        sendOutlookCalendarInvite(inviteDir.args).then(function(res){
+          hideTyping(thinking);
+          if(res.ok){
+            addMsg("toolcal","✅ Calendar invite created and sent (HTTP "+res.status+"). The event is in your Outlook calendar; attendees will receive the meeting invitation by email shortly.");
+            hist.push({role:"user",content:"[System: Calendar invite created and sent successfully via Make webhook. HTTP "+res.status+". Attendees: "+attEmails+". Confirm to Iacovos in one short sentence.]"});
+          }else{
+            addMsg("toolcal","❌ Calendar invite failed (HTTP "+res.status+"): "+res.info);
+            hist.push({role:"user",content:"[System: Calendar invite FAILED. HTTP "+res.status+". Error: "+res.info+". Tell Iacovos honestly that the invite did not go out.]"});
+          }
+          callClaude();
+        });
+      }else if(emailDir){
+        var visible=reply.replace(emailDir.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("tool","Sending email to "+emailDir.args.to+"...");
+        var thinking=showTyping();
+        sendOutlookEmail(emailDir.args.to,emailDir.args.subject,emailDir.args.body).then(function(res){
           hideTyping(thinking);
           if(res.ok){
             addMsg("tool","✅ Email sent successfully (HTTP "+res.status+"). It will appear in your Outlook Sent Items in a few seconds.");
-            hist.push({role:"user",content:"[System: Email sent successfully via Make webhook. HTTP "+res.status+". The email is on its way to "+directive.args.to+". Confirm to Iacovos in one short sentence.]"});
+            hist.push({role:"user",content:"[System: Email sent successfully via Make webhook. HTTP "+res.status+". The email is on its way to "+emailDir.args.to+". Confirm to Iacovos in one short sentence.]"});
           }else{
             addMsg("tool","❌ Email send failed (HTTP "+res.status+"): "+res.info);
             hist.push({role:"user",content:"[System: Email send FAILED. HTTP "+res.status+". Error: "+res.info+". Tell Iacovos honestly that the send did not work.]"});
@@ -362,10 +437,10 @@ function callClaude(){
 function addMsg(role,text){
   var msgs=document.getElementById("msgs");
   var row=document.createElement("div");
-  if(role==="tool"){
+  if(role==="tool"||role==="toolcal"){
     row.className="row a";
-    var av=document.createElement("div");av.className="mav a";av.textContent="✉";
-    var bub=document.createElement("div");bub.className="bub tool-bub";
+    var av=document.createElement("div");av.className="mav a";av.textContent=role==="toolcal"?"📅":"✉";
+    var bub=document.createElement("div");bub.className="bub tool-bub"+(role==="toolcal"?" cal":"");
     bub.textContent=text;
     row.appendChild(av);row.appendChild(bub);
   }else{
