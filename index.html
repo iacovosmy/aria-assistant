@@ -40,7 +40,6 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
 .appname{font-weight:700;font-size:15px}
 .acct-badges{display:flex;gap:6px}
 .badge{font-size:11px;padding:3px 8px;border-radius:20px;font-weight:600}
-.badge-personal{background:#e8f0fe;color:#1a73e8}
 .badge-work{background:#fce8e6;color:#d93025}
 .signout-btn{background:#f0eee9;border:none;border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;font-family:inherit;color:#555}
 #msgs{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
@@ -52,6 +51,7 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
 .bub{padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.65;max-width:76%;word-wrap:break-word}
 .row.a .bub{background:#fff;border:1px solid #eee;border-top-left-radius:4px}
 .row.u .bub{background:#1a1916;color:#f7f6f3;border-top-right-radius:4px}
+.tool-bub{background:#eef7f1!important;border:1px solid #cfe6d8!important;color:#1a6b3c;font-size:13px;font-style:italic}
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px}
 .eicon{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#1a6b3c,#2d9b5a);display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 16px}
 .etitle{font-size:20px;font-weight:700;margin-bottom:8px;color:#111}
@@ -69,49 +69,30 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
 </style>
 </head>
 <body>
-
 <div id="login">
   <div class="card">
     <div class="icon">&#10022;</div>
     <h1>Welcome to Aria</h1>
-    <p class="sub">Connect both Microsoft 365 accounts for a unified AI assistant.</p>
-
+    <p class="sub">Connect your Outlook account to get started.</p>
     <div class="acct-section">
-      <div class="acct-label">Personal Account</div>
-      <div class="acct-status">
-        <div>
-          <div class="acct-name">Iacovos Mylonas</div>
-          <div class="acct-email">iacovosmy@gmail.com</div>
-        </div>
-        <div class="dot-grey" id="dot1"></div>
-      </div>
-      <button class="ms-btn" id="btn1" onclick="signIn(0)">
-        <svg viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>
-        Sign in with Microsoft
-      </button>
-    </div>
-
-    <div class="acct-section">
-      <div class="acct-label">Work Account</div>
+      <div class="acct-label">Outlook Account</div>
       <div class="acct-status">
         <div>
           <div class="acct-name">Iacovos Mylonas (MIM)</div>
           <div class="acct-email">iacovos.mylonas@mim.com.cy</div>
         </div>
-        <div class="dot-grey" id="dot2"></div>
+        <div class="dot-grey" id="dot1"></div>
       </div>
-      <button class="ms-btn" id="btn2" onclick="signIn(1)">
+      <button class="ms-btn" id="btn1" onclick="signIn()">
         <svg viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>
         Sign in with Microsoft
       </button>
     </div>
-
     <div id="status"></div>
     <button class="start-btn" id="startBtn" onclick="startAria()">Start Aria</button>
-    <p style="font-size:12px;color:#999;margin-top:10px">Sign in to at least one account to continue</p>
+    <p style="font-size:12px;color:#999;margin-top:10px">Sign in to continue. Additional business accounts can be added later.</p>
   </div>
 </div>
-
 <div id="apiscreen">
   <div class="card">
     <div class="icon">&#9881;</div>
@@ -122,7 +103,6 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
     <p style="font-size:12px;color:#999;margin-top:12px">Get your key at console.anthropic.com</p>
   </div>
 </div>
-
 <div id="app">
   <div id="topbar">
     <div class="tl">
@@ -138,7 +118,7 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
     <div class="empty" id="empty">
       <div class="eicon">&#10022;</div>
       <div class="etitle" id="greeting">Good to see you.</div>
-      <p class="esub" id="greetSub">Ask me about emails, calendar, Teams, or files across all your accounts.</p>
+      <p class="esub" id="greetSub">Ask me about emails or your calendar — I can also send email from your Outlook on demand.</p>
     </div>
   </div>
   <div id="iarea">
@@ -148,37 +128,41 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
     </div>
   </div>
 </div>
-
 <script>
-var ACCOUNTS = [
-  { clientId:"20f2158b-7ca7-4ecd-bdce-0ec7ddb668e1", tenant:"consumers", label:"Personal", email:"iacovosmy@gmail.com", color:"#1a73e8", bg:"#e8f0fe" },
-  { clientId:"d1a83208-df12-4871-9274-70ec3c030b55", tenant:"fcbd37b4-bfc4-40d1-b0b9-f903d592db82", label:"Work (MIM)", email:"iacovos.mylonas@mim.com.cy", color:"#d93025", bg:"#fce8e6" }
-];
+var ACCOUNT = { clientId:"d1a83208-df12-4871-9274-70ec3c030b55", tenant:"fcbd37b4-bfc4-40d1-b0b9-f903d592db82", label:"MIM", email:"iacovos.mylonas@mim.com.cy", color:"#d93025", bg:"#fce8e6" };
 var SCOPES="User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite.All";
 var REDIRECT=location.origin+location.pathname;
-var tokens=[null,null], apiKey="", hist=[], busy=false, userName="Iacovos";
+var SEND_WEBHOOK="https://hook.eu1.make.com/4fxvc3jo8bunqqmp5v14iy55ke91i3ki";
+var token=null, apiKey="", hist=[], busy=false, userName="Iacovos";
+
+(function migrate(){
+  if(localStorage.getItem("aria_v")==="2")return;
+  var oldWorkTok=localStorage.getItem("aria_tok_1");
+  var oldWorkExp=localStorage.getItem("aria_tok_exp_1");
+  var oldWorkRef=localStorage.getItem("aria_ref_1");
+  if(oldWorkTok)localStorage.setItem("aria_tok_mim",oldWorkTok);
+  if(oldWorkExp)localStorage.setItem("aria_tok_exp_mim",oldWorkExp);
+  if(oldWorkRef)localStorage.setItem("aria_ref_mim",oldWorkRef);
+  ["aria_tok_0","aria_tok_exp_0","aria_ref_0","aria_tok_1","aria_tok_exp_1","aria_ref_1","pkce_v_0","pkce_v_1","oauth_s_0","oauth_s_1","oauth_idx"].forEach(function(k){localStorage.removeItem(k);});
+  localStorage.setItem("aria_v","2");
+})();
 
 function setStatus(m){document.getElementById("status").textContent=m;}
-
 function showScreen(id){
   document.getElementById("login").style.display=id==="login"?"flex":"none";
   document.getElementById("apiscreen").className=id==="apiscreen"?"on":"";
   document.getElementById("app").className=id==="app"?"on":"";
 }
-
 function rand(n){var a=new Uint8Array(n);crypto.getRandomValues(a);return Array.from(a).map(function(b){return b.toString(16).padStart(2,"0");}).join("");}
 function b64url(b){return btoa(String.fromCharCode.apply(null,new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");}
-
-function signIn(idx){
-  var acct=ACCOUNTS[idx];
-  setStatus("Redirecting to Microsoft for "+acct.label+"...");
-  var v=rand(32);localStorage.setItem("pkce_v_"+idx,v);
-  var s=rand(16);localStorage.setItem("oauth_s_"+idx,s);
-  localStorage.setItem("oauth_idx",idx);
+function signIn(){
+  setStatus("Redirecting to Microsoft for "+ACCOUNT.label+"...");
+  var v=rand(32);localStorage.setItem("pkce_v",v);
+  var s=rand(16);localStorage.setItem("oauth_s",s);
   crypto.subtle.digest("SHA-256",new TextEncoder().encode(v)).then(function(h){
     var c=b64url(h);
-    location.href="https://login.microsoftonline.com/"+acct.tenant+"/oauth2/v2.0/authorize"
-      +"?client_id="+acct.clientId
+    location.href="https://login.microsoftonline.com/"+ACCOUNT.tenant+"/oauth2/v2.0/authorize"
+      +"?client_id="+ACCOUNT.clientId
       +"&response_type=code"
       +"&redirect_uri="+encodeURIComponent(REDIRECT)
       +"&scope="+encodeURIComponent(SCOPES)
@@ -186,136 +170,127 @@ function signIn(idx){
       +"&code_challenge="+c
       +"&code_challenge_method=S256"
       +"&prompt=select_account"
-      +"&login_hint="+encodeURIComponent(acct.email);
+      +"&login_hint="+encodeURIComponent(ACCOUNT.email);
   });
 }
-
 function handleCallback(){
   var p=new URLSearchParams(location.search);
   var code=p.get("code"),state=p.get("state"),error=p.get("error");
   if(error){setStatus("Login error: "+p.get("error_description"));showScreen("login");return true;}
   if(!code)return false;
-  var idx=parseInt(localStorage.getItem("oauth_idx")||"0");
-  var acct=ACCOUNTS[idx];
-  if(state!==localStorage.getItem("oauth_s_"+idx)){setStatus("State mismatch.");showScreen("login");return true;}
-  var v=localStorage.getItem("pkce_v_"+idx);
+  if(state!==localStorage.getItem("oauth_s")){setStatus("State mismatch.");showScreen("login");return true;}
+  var v=localStorage.getItem("pkce_v");
   history.replaceState({},"",REDIRECT);
-  setStatus("Completing sign in for "+acct.label+"...");
-  fetch("https://login.microsoftonline.com/"+acct.tenant+"/oauth2/v2.0/token",{
+  setStatus("Completing sign in for "+ACCOUNT.label+"...");
+  fetch("https://login.microsoftonline.com/"+ACCOUNT.tenant+"/oauth2/v2.0/token",{
     method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},
-    body:"client_id="+acct.clientId+"&grant_type=authorization_code&code="+encodeURIComponent(code)+"&redirect_uri="+encodeURIComponent(REDIRECT)+"&code_verifier="+v
+    body:"client_id="+ACCOUNT.clientId+"&grant_type=authorization_code&code="+encodeURIComponent(code)+"&redirect_uri="+encodeURIComponent(REDIRECT)+"&code_verifier="+v
   }).then(function(r){return r.json();}).then(function(d){
     if(d.error){setStatus("Token error: "+d.error_description);showScreen("login");return;}
-    tokens[idx]=d.access_token;
-    localStorage.setItem("aria_tok_"+idx,d.access_token);
-    localStorage.setItem("aria_tok_exp_"+idx,Date.now()+(d.expires_in*1000));
-    if(d.refresh_token)localStorage.setItem("aria_ref_"+idx,d.refresh_token);
-    markSigned(idx);
+    token=d.access_token;
+    localStorage.setItem("aria_tok_mim",d.access_token);
+    localStorage.setItem("aria_tok_exp_mim",Date.now()+(d.expires_in*1000));
+    if(d.refresh_token)localStorage.setItem("aria_ref_mim",d.refresh_token);
+    markSigned();
     setStatus("");
     showScreen("login");
     checkReady();
   }).catch(function(e){setStatus("Error: "+e.message);showScreen("login");});
   return true;
 }
-
-function markSigned(idx){
-  var acct=ACCOUNTS[idx];
-  var dot=document.getElementById("dot"+(idx+1));
+function markSigned(){
+  var dot=document.getElementById("dot1");
   if(dot){dot.className="dot-green";}
-  var btn=document.getElementById("btn"+(idx+1));
-  if(btn){btn.className="ms-btn signed";btn.innerHTML="&#10003; Signed in as "+acct.email;btn.onclick=null;}
+  var btn=document.getElementById("btn1");
+  if(btn){btn.className="ms-btn signed";btn.innerHTML="&#10003; Signed in as "+ACCOUNT.email;btn.onclick=null;}
 }
-
 function checkReady(){
-  var any=tokens[0]||tokens[1];
   var btn=document.getElementById("startBtn");
-  if(any){btn.className="start-btn ready";}
+  if(token){btn.className="start-btn ready";}
 }
-
 function startAria(){
   apiKey=localStorage.getItem("aria_key")||"";
   if(!apiKey){showScreen("apiscreen");return;}
   launchApp();
 }
-
 function saveKey(){
   var k=document.getElementById("apikey").value.trim();
   if(k.indexOf("sk-")!==0){alert("Please enter a valid Anthropic API key.");return;}
   apiKey=k;localStorage.setItem("aria_key",k);
   launchApp();
 }
-
 function launchApp(){
-  // Build account badges
-  var badges="";
-  if(tokens[0])badges+='<span class="badge" style="background:'+ACCOUNTS[0].bg+';color:'+ACCOUNTS[0].color+'">Personal</span>';
-  if(tokens[1])badges+='<span class="badge" style="background:'+ACCOUNTS[1].bg+';color:'+ACCOUNTS[1].color+'">Work MIM</span>';
-  document.getElementById("acctBadges").innerHTML=badges;
+  document.getElementById("acctBadges").innerHTML='<span class="badge badge-work">Outlook MIM</span>';
   var h=new Date().getHours();
   var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";
   document.getElementById("greeting").textContent=g+", Iacovos.";
-  var connected=[];
-  if(tokens[0])connected.push("personal (Gmail)");
-  if(tokens[1])connected.push("work (MIM)");
-  document.getElementById("greetSub").textContent="Connected to your "+connected.join(" & ")+" Microsoft 365. Ask me about emails, calendar, Teams, or files across all accounts.";
+  document.getElementById("greetSub").textContent="Connected to your Outlook ("+ACCOUNT.email+"). Ask me about emails or your calendar — I can also send email from your Outlook on demand.";
   showScreen("app");
   document.getElementById("inp").focus();
 }
-
 function doSignOut(){
-  if(!confirm("Sign out of all accounts?"))return;
+  if(!confirm("Sign out?"))return;
   localStorage.clear();
   location.reload();
 }
-
-function graphFetch(token,url){
+function graphFetch(url){
   return fetch("https://graph.microsoft.com/v1.0/"+url,{headers:{Authorization:"Bearer "+token}}).then(function(r){return r.json();});
 }
-
 function getM365Context(txt,cb){
   var lower=txt.toLowerCase();
   var isCalendar=lower.includes("calendar")||lower.includes("meeting")||lower.includes("schedule")||lower.includes("today")||lower.includes("tomorrow")||lower.includes("week")||lower.includes("month")||lower.includes("appointment")||lower.includes("event");
   var isEmail=lower.includes("email")||lower.includes("inbox")||lower.includes("mail")||lower.includes("unread")||lower.includes("message");
-
   var promises=[];
-
   if(isCalendar){
     var start=new Date();start.setHours(0,0,0,0);
     var end=new Date(start.getTime()+(60*86400000));
     var calUrl="me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=subject,start,end,location&$orderby=start/dateTime asc";
-    ACCOUNTS.forEach(function(acct,i){
-      if(!tokens[i])return;
-      promises.push(
-        graphFetch(tokens[i],calUrl).then(function(d){
-          if(!d.value||d.value.length===0)return "["+acct.label+"] Calendar: empty for next 60 days.";
-          var lines=d.value.map(function(e){
-            var s=new Date(e.start.dateTime+(e.start.dateTime.endsWith("Z")?"":"Z"));
-            var en=new Date(e.end.dateTime+(e.end.dateTime.endsWith("Z")?"":"Z"));
-            return s.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})+" "+s.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+en.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+" | "+e.subject+(e.location&&e.location.displayName?" @ "+e.location.displayName:"");
-          }).join("\n");
-          return "["+acct.label+" Calendar - LIVE "+d.value.length+" events]\n"+lines;
-        }).catch(function(){return "["+acct.label+"] Calendar fetch failed.";})
-      );
-    });
+    promises.push(
+      graphFetch(calUrl).then(function(d){
+        if(!d.value||d.value.length===0)return "[Outlook MIM Calendar] empty for next 60 days.";
+        var lines=d.value.map(function(e){
+          var s=new Date(e.start.dateTime+(e.start.dateTime.endsWith("Z")?"":"Z"));
+          var en=new Date(e.end.dateTime+(e.end.dateTime.endsWith("Z")?"":"Z"));
+          return s.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})+" "+s.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+en.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+" | "+e.subject+(e.location&&e.location.displayName?" @ "+e.location.displayName:"");
+        }).join("\n");
+        return "[Outlook MIM Calendar - LIVE "+d.value.length+" events]\n"+lines;
+      }).catch(function(){return "[Outlook MIM Calendar] fetch failed.";})
+    );
   }
-
   if(isEmail){
     var mailUrl="me/mailFolders/inbox/messages?$top=8&$select=subject,from,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc";
-    ACCOUNTS.forEach(function(acct,i){
-      if(!tokens[i])return;
-      promises.push(
-        graphFetch(tokens[i],mailUrl).then(function(d){
-          if(!d.value||d.value.length===0)return "["+acct.label+"] Inbox: empty.";
-          return "["+acct.label+" Email - LIVE "+d.value.length+" emails]\n"+d.value.map(function(e){
-            return(e.isRead?"":"[UNREAD] ")+e.subject+" | from: "+e.from.emailAddress.address+" | "+new Date(e.receivedDateTime).toLocaleDateString("en-US",{month:"short",day:"numeric"})+" | "+e.bodyPreview.slice(0,100);
-          }).join("\n");
-        }).catch(function(){return "["+acct.label+"] Email fetch failed.";})
-      );
-    });
+    promises.push(
+      graphFetch(mailUrl).then(function(d){
+        if(!d.value||d.value.length===0)return "[Outlook MIM Inbox] empty.";
+        return "[Outlook MIM Inbox - LIVE "+d.value.length+" emails]\n"+d.value.map(function(e){
+          return(e.isRead?"":"[UNREAD] ")+e.subject+" | from: "+e.from.emailAddress.address+" | "+new Date(e.receivedDateTime).toLocaleDateString("en-US",{month:"short",day:"numeric"})+" | "+e.bodyPreview.slice(0,100);
+        }).join("\n");
+      }).catch(function(){return "[Outlook MIM Inbox] fetch failed.";})
+    );
   }
-
   if(promises.length===0){cb("");return;}
   Promise.all(promises).then(function(results){cb("LIVE M365 DATA:\n\n"+results.join("\n\n"));}).catch(function(){cb("");});
+}
+
+function sendOutlookEmail(to,subject,body){
+  return fetch(SEND_WEBHOOK,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({to:to,subject:subject,body:body})
+  }).then(function(r){
+    return r.text().then(function(t){return {ok:r.ok,status:r.status,info:t||"(empty body)"};});
+  }).catch(function(e){return {ok:false,status:0,info:e.message};});
+}
+
+function parseSendDirective(text){
+  var re=/SEND_EMAIL:\s*(\{[\s\S]*?\})\s*$/m;
+  var m=text.match(re);
+  if(!m)return null;
+  try{
+    var args=JSON.parse(m[1]);
+    if(!args.to||!args.subject||args.body==null)return null;
+    return {raw:m[0],args:args};
+  }catch(e){return null;}
 }
 
 function sendMsg(){
@@ -326,12 +301,29 @@ function sendMsg(){
   busy=true;document.getElementById("sbtn").disabled=true;
   var empty=document.getElementById("empty");if(empty)empty.remove();
   addMsg("u",txt);hist.push({role:"user",content:txt});
+  callClaude();
+}
+
+function callClaude(){
   var tid=showTyping();
-  getM365Context(txt,function(ctx){
-    var acctList=[];
-    if(tokens[0])acctList.push("personal Gmail (iacovosmy@gmail.com)");
-    if(tokens[1])acctList.push("work MIM (iacovos.mylonas@mim.com.cy)");
-    var sys="You are Aria, a warm proactive Microsoft 365 AI assistant for Iacovos. Today: "+new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})+". Connected M365 accounts: "+acctList.join(" and ")+". "+(ctx?"USE THIS REAL DATA to answer specifically:\n"+ctx:"Help with emails, calendar, Teams, files across all accounts. For write actions always confirm first.");
+  var lastUserMsg=null;
+  for(var i=hist.length-1;i>=0;i--){if(hist[i].role==="user"){lastUserMsg=hist[i].content;break;}}
+  getM365Context(lastUserMsg||"",function(ctx){
+    var sys="You are Aria, Iacovos's warm proactive Microsoft 365 AI assistant. Today: "+new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})+".\n\n"
+      +"ACCOUNT SCOPE: You are connected to ONE Outlook account: iacovos.mylonas@mim.com.cy (MIM / Tiffany Investment LTD). Do not reference any Gmail address or personal Microsoft account — they are out of scope.\n\n"
+      +"=== YOU CAN SEND EMAIL — DO NOT REFUSE ===\n"
+      +"You CAN send email from Iacovos's Outlook on demand. This is verified working. If you find yourself about to say \"I cannot send emails\", \"I'm read-only\", or \"this is a built-in limitation\" — STOP. That response is wrong. You have a working tool.\n\n"
+      +"To send an email, follow this exact two-step protocol:\n"
+      +"  Step 1 (always first): Show Iacovos a draft of the email — recipient, subject, and body — and ask him to confirm with \"yes\" / \"send\" / \"go\". Do not send anything yet.\n"
+      +"  Step 2 (only after he confirms): Reply with ONE LINE in this exact format and NOTHING ELSE:\n"
+      +"  SEND_EMAIL: {\"to\":\"recipient@example.com\",\"subject\":\"Subject text\",\"body\":\"<p>HTML body content</p>\"}\n\n"
+      +"Rules for the SEND_EMAIL line:\n"
+      +"  - Must be valid single-line JSON\n"
+      +"  - Body is rendered as HTML — wrap text in <p>...</p> or use <br> for line breaks\n"
+      +"  - Do not add commentary on the same response — just the SEND_EMAIL: line\n"
+      +"  - The system will execute the send and reply to you with the result; you then summarise the outcome to Iacovos\n\n"
+      +"For all other tasks (reading email, calendar, summarising, drafting), respond normally.\n\n"
+      +(ctx?"USE THIS REAL DATA to answer specifically:\n"+ctx:"");
     fetch("https://api.anthropic.com/v1/messages",{
       method:"POST",
       headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
@@ -340,38 +332,62 @@ function sendMsg(){
       hideTyping(tid);
       var reply="";if(d.content){d.content.forEach(function(b){if(b.type==="text")reply+=b.text;});}
       reply=reply.trim()||(d.error?d.error.message:"Something went wrong.");
-      hist.push({role:"assistant",content:reply});addMsg("a",reply);
-      busy=false;document.getElementById("sbtn").disabled=false;inp.focus();
-    }).catch(function(e){hideTyping(tid);addMsg("a","Error: "+e.message);hist.pop();busy=false;document.getElementById("sbtn").disabled=false;inp.focus();});
+      hist.push({role:"assistant",content:reply});
+
+      var directive=parseSendDirective(reply);
+      if(directive){
+        var visible=reply.replace(directive.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("tool","Sending email to "+directive.args.to+"...");
+        var thinking=showTyping();
+        sendOutlookEmail(directive.args.to,directive.args.subject,directive.args.body).then(function(res){
+          hideTyping(thinking);
+          if(res.ok){
+            addMsg("tool","✅ Email sent successfully (HTTP "+res.status+"). It will appear in your Outlook Sent Items in a few seconds.");
+            hist.push({role:"user",content:"[System: Email sent successfully via Make webhook. HTTP "+res.status+". The email is on its way to "+directive.args.to+". Confirm to Iacovos in one short sentence.]"});
+          }else{
+            addMsg("tool","❌ Email send failed (HTTP "+res.status+"): "+res.info);
+            hist.push({role:"user",content:"[System: Email send FAILED. HTTP "+res.status+". Error: "+res.info+". Tell Iacovos honestly that the send did not work.]"});
+          }
+          callClaude();
+        });
+      }else{
+        addMsg("a",reply);
+        busy=false;document.getElementById("sbtn").disabled=false;document.getElementById("inp").focus();
+      }
+    }).catch(function(e){hideTyping(tid);addMsg("a","Error: "+e.message);hist.pop();busy=false;document.getElementById("sbtn").disabled=false;document.getElementById("inp").focus();});
   });
 }
 
 function addMsg(role,text){
   var msgs=document.getElementById("msgs");
-  var row=document.createElement("div");row.className="row "+role;
-  var av=document.createElement("div");av.className="mav "+role;av.textContent=role==="a"?"Ar":"I";
-  var bub=document.createElement("div");bub.className="bub";
-  var safe=text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\*\*(.*?)\*\*/g,"<strong>$1<\/strong>").replace(/\n/g,"<br>");
-  bub.innerHTML=safe;row.appendChild(av);row.appendChild(bub);msgs.appendChild(row);msgs.scrollTop=msgs.scrollHeight;
+  var row=document.createElement("div");
+  if(role==="tool"){
+    row.className="row a";
+    var av=document.createElement("div");av.className="mav a";av.textContent="✉";
+    var bub=document.createElement("div");bub.className="bub tool-bub";
+    bub.textContent=text;
+    row.appendChild(av);row.appendChild(bub);
+  }else{
+    row.className="row "+role;
+    var av=document.createElement("div");av.className="mav "+role;av.textContent=role==="a"?"Ar":"I";
+    var bub=document.createElement("div");bub.className="bub";
+    var safe=text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\*\*(.*?)\*\*/g,"<strong>$1<\/strong>").replace(/\n/g,"<br>");
+    bub.innerHTML=safe;
+    row.appendChild(av);row.appendChild(bub);
+  }
+  msgs.appendChild(row);msgs.scrollTop=msgs.scrollHeight;
 }
 function showTyping(){var id="ty"+Date.now(),msgs=document.getElementById("msgs");var row=document.createElement("div");row.className="row a";row.id=id;var av=document.createElement("div");av.className="mav a";av.textContent="Ar";var bub=document.createElement("div");bub.className="bub";bub.innerHTML="<div class=\"tdots\"><div class=\"tdot\"></div><div class=\"tdot\"></div><div class=\"tdot\"></div></div>";row.appendChild(av);row.appendChild(bub);msgs.appendChild(row);msgs.scrollTop=msgs.scrollHeight;return id;}
 function hideTyping(id){var el=document.getElementById(id);if(el)el.remove();}
-
 window.onload=function(){
   apiKey=localStorage.getItem("aria_key")||"";
   document.getElementById("sbtn").addEventListener("click",sendMsg);
   document.getElementById("inp").addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
   document.getElementById("inp").addEventListener("input",function(){this.style.height="auto";this.style.height=Math.min(this.scrollHeight,100)+"px";});
-
-  // Restore saved tokens
-  var restored=false;
-  ACCOUNTS.forEach(function(acct,i){
-    var tok=localStorage.getItem("aria_tok_"+i);
-    var exp=parseInt(localStorage.getItem("aria_tok_exp_"+i)||"0");
-    if(tok&&exp>Date.now()){tokens[i]=tok;markSigned(i);restored=true;}
-  });
-  if(restored)checkReady();
-
+  var tok=localStorage.getItem("aria_tok_mim");
+  var exp=parseInt(localStorage.getItem("aria_tok_exp_mim")||"0");
+  if(tok&&exp>Date.now()){token=tok;markSigned();checkReady();}
   if(handleCallback())return;
   showScreen("login");
 };
