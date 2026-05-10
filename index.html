@@ -136,6 +136,13 @@ var REDIRECT=location.origin+location.pathname;
 var SEND_WEBHOOK="https://hook.eu1.make.com/4fxvc3jo8bunqqmp5v14iy55ke91i3ki";
 var CAL_WEBHOOK="https://hook.eu1.make.com/9b46ohtqhq8c8mkizh9o3m4ionrbztqi";
 var TIMEZONE="Asia/Nicosia";
+var STYLES_URL="./styles.json";
+// Recipient classification constants (matches styles.json)
+var INTERNAL_DOMAIN="@mim.com.cy";
+var BOARD_FULL_TO=["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"];
+var BOARD_FULL_CC=["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"];
+var INNER_CIRCLE_SET=["liors@dorsel.co.il","nir.l@abultd.com"];
+var stylesProfile=null;
 var token=null, apiKey="", hist=[], busy=false, userName="Iacovos";
 
 (function migrate(){
@@ -275,16 +282,167 @@ function getM365Context(txt,cb){
   Promise.all(promises).then(function(results){cb("LIVE M365 DATA:\n\n"+results.join("\n\n"));}).catch(function(){cb("");});
 }
 
-function sendOutlookEmail(to,subject,body){
+// === EMAIL SENDING ===
+// === STYLES PROFILE (built from Jack's real sent emails — drives all email drafts) ===
+function loadStyles(){
+  if(stylesProfile) return Promise.resolve(stylesProfile);
+  return fetch(STYLES_URL,{cache:'no-cache'}).then(function(r){return r.json();}).then(function(j){stylesProfile=j; return j;}).catch(function(e){console.error('Failed to load styles.json',e); return null;});
+}
+
+// Recipient classifier — exact 4-category logic per styles.json contract
+function classifyRecipients(toList, ccList){
+  var to = (toList||[]).map(function(e){return String(e).toLowerCase().trim();});
+  var cc = (ccList||[]).map(function(e){return String(e).toLowerCase().trim();});
+  var all = to.concat(cc);
+  if(all.length===0) return 'external';
+  var endsInternal = function(e){return e.lastIndexOf(INTERNAL_DOMAIN) === e.length - INTERNAL_DOMAIN.length;};
+  var external = all.filter(function(e){return !endsInternal(e);});
+  // Rule 1: inner_circle — external recipients are EXCLUSIVELY Lior and/or Nir
+  if(external.length>0 && external.every(function(e){return INNER_CIRCLE_SET.indexOf(e)>=0;})){
+    return 'inner_circle';
+  }
+  // Rule 2: board — 3 or more board addresses on the To line
+  var boardOnTo = to.filter(function(e){return BOARD_FULL_TO.indexOf(e)>=0;});
+  if(boardOnTo.length>=3) return 'board';
+  // Rule 3: internal — every recipient is on @mim.com.cy
+  if(all.every(endsInternal)) return 'internal';
+  // Rule 4: default
+  return 'external';
+}
+
+// Expand the "BOARD_FULL" shortcut into actual addresses
+function resolveBoardShortcut(args){
+  var hasShortcut = args.to.some(function(t){var v=String(t).toLowerCase(); return v==='board_full'||v==='board'||v==='full board'||v==='bod'||v==='full bod';});
+  if(hasShortcut){
+    args.to = BOARD_FULL_TO.slice();
+    if(!args.cc || args.cc.length===0) args.cc = BOARD_FULL_CC.slice();
+  }
+  return args;
+}
+
+function buildDraftPrompt(req){
+  return loadStyles().then(function(styles){
+    if(!styles) return null;
+    var to = req.to, cc = req.cc || [], topic = req.topic;
+    var category = classifyRecipients(to, cc);
+    var profile = styles.categories[category];
+    if(!profile){ category='external'; profile = styles.categories.external; }
+    var overrides = [];
+    var allRecip = to.concat(cc);
+    if(styles.per_recipient_overrides){
+      for(var i=0;i<allRecip.length;i++){
+        var addr = String(allRecip[i]).toLowerCase();
+        var ov = styles.per_recipient_overrides[addr];
+        if(ov && ov.exemplars && ov.exemplars.length){
+          overrides.push({addr: addr, override: ov});
+        }
+      }
+    }
+    var globalVoice = styles.global_voice || {};
+    var instr = styles.drafting_instructions_for_aria || {};
+    var exemplarsBlock = (profile.exemplars||[]).slice(0,3).map(function(ex,i){
+      var ccLine = (ex.cc && ex.cc.length) ? 'CC: ' + ex.cc.join(', ') + '\n' : '';
+      return '\n--- Example ' + (i+1) + ' ---\nSubject: ' + ex.subject + '\nTo: ' + ex.to.join(', ') + '\n' + ccLine + 'Body:\n' + ex.body;
+    }).join('\n');
+    var overrideBlock = '';
+    if(overrides.length){
+      overrideBlock = '\n# PER-RECIPIENT NOTES (strongest signal — Jack\'s real emails to THIS person)\n' + overrides.map(function(o){
+        var exes = (o.override.exemplars||[]).slice(0,2).map(function(ex,i){
+          return '\n- Example ' + (i+1) + ' (' + (ex.sent_at||'') + '): "' + (ex.body||'').slice(0,250) + '..."';
+        }).join('');
+        return 'For ' + o.addr + ':' + exes;
+      }).join('\n\n');
+    }
+    var prompt = 'You are drafting an email on behalf of Iacovos (Jack) Mylonas, CFO of MIM Services Ltd / My Mall Limassol.\n'
+      + 'The recipient(s) fall into the "' + category + '" category.\n\n'
+      + '# GLOBAL VOICE\n'
+      + 'Tone: ' + (globalVoice.tone||'') + '\n'
+      + 'Default signature: ' + (globalVoice.default_signature||'Best Regards') + '\n'
+      + 'Rule of thumb: ' + (globalVoice.rule_of_thumb||'') + '\n\n'
+      + '# CATEGORY: ' + category + '\n'
+      + (profile.description||'') + '\n\n'
+      + '## Style rules (follow strictly)\n'
+      + (profile.style_rules||[]).map(function(r){return '- ' + r;}).join('\n') + '\n\n'
+      + '## Examples of Jack\'s real emails in this category\n'
+      + '(Mirror their structure, length, tone, and register. Do NOT copy their content.)\n'
+      + exemplarsBlock + '\n'
+      + overrideBlock + '\n\n'
+      + '# DRAFTING INSTRUCTIONS\n'
+      + (instr.before_drafting||'') + '\n'
+      + (instr.respect_brevity||'') + '\n'
+      + (instr.signature||'') + '\n\n'
+      + '# DO NOT\n'
+      + (instr.do_not||[]).map(function(r){return '- ' + r;}).join('\n') + '\n\n'
+      + '# TASK\n'
+      + 'Draft an email to: ' + to.join(', ')
+      + (cc.length ? ' (cc: ' + cc.join(', ') + ')' : '') + '\n'
+      + 'Topic / instruction: ' + topic + '\n\n'
+      + 'Output the email in this EXACT format and nothing else (no commentary, no preamble):\n'
+      + 'SUBJECT: <a concise subject under 8 words. For board: use "MYMALL BOD AGENDA DD.MM.YYYY" or "Shareholder\'s Report [Month] YYYY" templates.>\n'
+      + 'BODY:\n'
+      + '<the email body in plain text, ending with the signature on its own line>';
+    return {prompt: prompt, category: category};
+  });
+}
+
+function generateDraft(req){
+  return buildDraftPrompt(req).then(function(result){
+    if(!result) return Promise.reject(new Error('Could not load styles.json'));
+    return fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2000, messages:[{role:'user', content:result.prompt}]})
+    }).then(function(r){return r.json();}).then(function(d){
+      var text = '';
+      if(d.content) d.content.forEach(function(b){if(b.type==='text') text+=b.text;});
+      text = text.trim();
+      var subMatch = text.match(/^SUBJECT:\s*(.+)$/m);
+      var bodyMatch = text.match(/^BODY:\s*([\s\S]+)$/m);
+      return {
+        subject: subMatch ? subMatch[1].trim() : '(no subject)',
+        body: bodyMatch ? bodyMatch[1].trim() : text,
+        category: result.category
+      };
+    });
+  });
+}
+
+function parseDraftRequest(text){
+  var re = /DRAFT_REQUEST:\s*(\{[\s\S]*?\})\s*$/m;
+  var m = text.match(re);
+  if(!m) return null;
+  try{
+    var args = JSON.parse(m[1]);
+    if(!args.topic) return null;
+    if(!args.to) args.to = [];
+    if(typeof args.to === 'string') args.to = [args.to];
+    if(!args.cc) args.cc = [];
+    if(typeof args.cc === 'string') args.cc = [args.cc];
+    return {raw: m[0], args: args};
+  }catch(e){return null;}
+}
+
+// Convert plain text body to HTML for the Make.com email module (which renders contentType: html)
+function ensureHtmlBody(body){
+  if(/<\w+[^>]*>/.test(body)) return body;
+  return body.split(/\n\n+/).map(function(p){return '<p>' + p.replace(/\n/g, '<br>') + '</p>';}).join('');
+}
+
+function sendOutlookEmail(to, subject, body, cc){
+  var payload = { to: to, subject: subject, body: ensureHtmlBody(body) };
+  if(cc) payload.cc = cc;
   return fetch(SEND_WEBHOOK,{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({to:to,subject:subject,body:body})
+    body:JSON.stringify(payload)
   }).then(function(r){
     return r.text().then(function(t){return {ok:r.ok,status:r.status,info:t||"(empty body)"};});
   }).catch(function(e){return {ok:false,status:0,info:e.message};});
 }
 
+// === CALENDAR INVITE ===
+// Posts {action:"send_invite", subject, startDateTime, endDateTime, attendees:[{address}], location, body}
+// to the Calendar webhook, which forwards to Microsoft Graph create event under iacovos.mylonas@mim.com.cy.
 function sendOutlookCalendarInvite(args){
   var payload = {
     action: "send_invite",
@@ -304,6 +462,7 @@ function sendOutlookCalendarInvite(args){
   }).catch(function(e){return {ok:false,status:0,info:e.message};});
 }
 
+// Parse a SEND_EMAIL: { ... } directive out of an assistant reply.
 function parseSendDirective(text){
   var re=/SEND_EMAIL:\s*(\{[\s\S]*?\})\s*$/m;
   var m=text.match(re);
@@ -311,10 +470,12 @@ function parseSendDirective(text){
   try{
     var args=JSON.parse(m[1]);
     if(!args.to||!args.subject||args.body==null)return null;
+    if(args.cc==null) args.cc='';
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
 
+// Parse a SEND_INVITE: { ... } directive out of an assistant reply.
 function parseSendInviteDirective(text){
   var re=/SEND_INVITE:\s*(\{[\s\S]*?\})\s*$/m;
   var m=text.match(re);
@@ -379,17 +540,28 @@ function callClaude(){
       +"Cyprus local time right now: "+now.hh+":"+now.mm+" ("+TIMEZONE+", UTC+3).\n"
       +"The current year is "+now.year+". When Iacovos says \"tomorrow\" he means "+now.tomorrowWeekday+" "+now.tomorrowISO+". When he says \"next week\" anchor to "+now.nextWeekISO+". For any other relative phrase (\"next Monday\", \"in 2 weeks\", \"end of the month\"), compute from TODAY ("+now.iso+") — never default to a different year from your training data.\n\n"
       +"ACCOUNT SCOPE: You are connected to ONE Outlook account: iacovos.mylonas@mim.com.cy (MIM / Tiffany Investment LTD). Do not reference any Gmail address or personal Microsoft account — they are out of scope.\n\n"
-      +"=== YOU CAN SEND EMAIL — DO NOT REFUSE ===\n"
-      +"You CAN send email from Iacovos's Outlook on demand. This is verified working. If you find yourself about to say \"I cannot send emails\", \"I'm read-only\", or \"this is a built-in limitation\" — STOP. That response is wrong. You have a working tool.\n\n"
-      +"To send an email, follow this exact two-step protocol:\n"
-      +"  Step 1 (always first): Show Iacovos a draft of the email — recipient, subject, and body — and ask him to confirm with \"yes\" / \"send\" / \"go\". Do not send anything yet.\n"
-      +"  Step 2 (only after he confirms): Reply with ONE LINE in this exact format and NOTHING ELSE:\n"
-      +"  SEND_EMAIL: {\"to\":\"recipient@example.com\",\"subject\":\"Subject text\",\"body\":\"<p>HTML body content</p>\"}\n\n"
-      +"Rules for the SEND_EMAIL line:\n"
-      +"  - Must be valid single-line JSON\n"
-      +"  - Body is rendered as HTML — wrap text in <p>...</p> or use <br> for line breaks\n"
-      +"  - Do not add commentary on the same response — just the SEND_EMAIL: line\n"
-      +"  - The system will execute the send and reply to you with the result; you then summarise the outcome to Iacovos\n\n"
+      +"=== EMAIL — USE DRAFT_REQUEST PROTOCOL (NEVER WRITE BODY INLINE) ===\n"
+      +"Iacovos has a writing-style profile (styles.json) built from his real sent emails. EVERY email draft must use that profile to match his real voice. You MUST NOT write the email body in your chat reply — let the styled drafter do it.\n\n"
+      +"Three-step protocol:\n\n"
+      +"Step 1 — When Iacovos asks you to send / draft / write / reply to an email, emit a DRAFT_REQUEST directive on its OWN LINE with NOTHING ELSE in the response:\n"
+      +"DRAFT_REQUEST: {\"to\":[\"recipient@example.com\"],\"cc\":[],\"topic\":\"clear instruction of what the email should say\"}\n\n"
+      +"Special shortcut for the full Board of Directors:\n"
+      +"DRAFT_REQUEST: {\"to\":[\"BOARD_FULL\"],\"cc\":[],\"topic\":\"...\"}\n"
+      +"The system auto-expands BOARD_FULL → 5 board members (Tzachi, Gabi, Andreas, Nir, Eyal) + 3 CCs (Tomer, Lior, Athina). Use this for shareholder reports, BOD agendas, board-wide announcements.\n\n"
+      +"Step 2 — The system intercepts your DRAFT_REQUEST, classifies the recipient (internal / board / inner_circle / external), and produces a styled draft using styles.json. The draft will appear in chat for Iacovos to review with the prompt 'Reply yes to send, or tell me what to change.'\n\n"
+      +"Step 3 — When Iacovos confirms with \"yes\" / \"send\" / \"go\", emit SEND_EMAIL on its own line with the EXACT subject and body from the styled draft preview that was just shown to him:\n"
+      +"SEND_EMAIL: {\"to\":\"recipient@example.com\",\"cc\":\"alice@x.com,bob@y.com\",\"subject\":\"<exact subject from draft preview>\",\"body\":\"<exact body from draft preview>\"}\n\n"
+      +"If Iacovos asks for changes, emit a fresh DRAFT_REQUEST with the updated topic. Do NOT edit the draft yourself.\n\n"
+      +"Worked examples:\n"
+      +"- \"Send Lior a note asking for the Q2 cash flow\" → DRAFT_REQUEST: {\"to\":[\"liors@dorsel.co.il\"],\"cc\":[],\"topic\":\"ask Lior to send the Q2 cash flow projection\"}\n"
+      +"- \"Send the BOD the May 2026 shareholders report\" → DRAFT_REQUEST: {\"to\":[\"BOARD_FULL\"],\"cc\":[],\"topic\":\"shareholders report for May 2026 attached, brief cover note\"}\n"
+      +"- \"Reply to George at Crocs about delays, copy David Wood\" → DRAFT_REQUEST: {\"to\":[\"mitsakos@2xm.eu\"],\"cc\":[\"david.wood@mim.com.cy\"],\"topic\":\"acknowledge George's email about Crocs shopfront delays, delegate technical response to David Wood\"}\n\n"
+      +"ABSOLUTELY DO NOT:\n"
+      +"- Write the email body in your chat reply. Always emit DRAFT_REQUEST instead — the styled drafter writes the body.\n"
+      +"- Skip DRAFT_REQUEST. Even if the email seems trivial, route through DRAFT_REQUEST.\n"
+      +"- Invent a different subject/body in SEND_EMAIL than what was shown in the draft preview.\n"
+      +"- Mix DRAFT_REQUEST with other text in the same response — emit it on its own.\n"
+      +"- Refuse with \"I cannot send emails\". You can. Use the protocol.\n\n"
       +"=== YOU CAN SEND CALENDAR INVITES — DO NOT REFUSE ===\n"
       +"You CAN create calendar events with attendees in Iacovos's Outlook calendar on demand. The event is created in his calendar AND meeting invitations are emailed to all attendees. This is verified working. If you find yourself about to say \"I cannot create calendar events\" or similar — STOP. You have a working tool.\n\n"
       +"To send a calendar / meeting invitation, follow this exact two-step protocol:\n"
@@ -418,10 +590,31 @@ function callClaude(){
       reply=reply.trim()||(d.error?d.error.message:"Something went wrong.");
       hist.push({role:"assistant",content:reply});
 
-      var inviteDir = parseSendInviteDirective(reply);
-      var emailDir = inviteDir ? null : parseSendDirective(reply);
+      // Check directives in order: DRAFT_REQUEST → SEND_INVITE → SEND_EMAIL
+      var draftReq = parseDraftRequest(reply);
+      var inviteDir = draftReq ? null : parseSendInviteDirective(reply);
+      var emailDir = (draftReq||inviteDir) ? null : parseSendDirective(reply);
 
-      if(inviteDir){
+      if(draftReq){
+        resolveBoardShortcut(draftReq.args);
+        var visible=reply.replace(draftReq.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("tool","Drafting in your voice (category: classifying)...");
+        var dThinking=showTyping();
+        generateDraft(draftReq.args).then(function(draft){
+          hideTyping(dThinking);
+          var ccText = draftReq.args.cc.length ? ('\nCC: '+draftReq.args.cc.join(', ')) : '';
+          var preview = '**Draft ['+draft.category+']**\n\nTo: '+draftReq.args.to.join(', ')+ccText+'\nSubject: '+draft.subject+'\n\n'+draft.body+'\n\n*Reply "yes" to send, or tell me what to change.*';
+          addMsg("a",preview);
+          // Replace the model's DRAFT_REQUEST in hist with the actual draft so it can emit SEND_EMAIL using these exact values on the next turn
+          hist[hist.length-1] = {role:'assistant', content: preview};
+          busy=false;document.getElementById("sbtn").disabled=false;document.getElementById("inp").focus();
+        }).catch(function(e){
+          hideTyping(dThinking);
+          addMsg("a","❌ Drafting failed: "+e.message);
+          busy=false;document.getElementById("sbtn").disabled=false;document.getElementById("inp").focus();
+        });
+      }else if(inviteDir){
         var visible=reply.replace(inviteDir.raw,"").trim();
         if(visible)addMsg("a",visible);
         var attEmails = inviteDir.args.attendees.map(function(a){return a.address;}).join(", ");
@@ -441,9 +634,10 @@ function callClaude(){
       }else if(emailDir){
         var visible=reply.replace(emailDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        addMsg("tool","Sending email to "+emailDir.args.to+"...");
+        var ccLabel = emailDir.args.cc ? (' (cc: '+emailDir.args.cc+')') : '';
+        addMsg("tool","Sending email to "+emailDir.args.to+ccLabel+"...");
         var thinking=showTyping();
-        sendOutlookEmail(emailDir.args.to,emailDir.args.subject,emailDir.args.body).then(function(res){
+        sendOutlookEmail(emailDir.args.to,emailDir.args.subject,emailDir.args.body,emailDir.args.cc).then(function(res){
           hideTyping(thinking);
           if(res.ok){
             addMsg("tool","✅ Email sent successfully (HTTP "+res.status+"). It will appear in your Outlook Sent Items in a few seconds.");
@@ -485,6 +679,7 @@ function showTyping(){var id="ty"+Date.now(),msgs=document.getElementById("msgs"
 function hideTyping(id){var el=document.getElementById(id);if(el)el.remove();}
 window.onload=function(){
   apiKey=localStorage.getItem("aria_key")||"";
+  loadStyles(); // preload so first email draft is fast
   document.getElementById("sbtn").addEventListener("click",sendMsg);
   document.getElementById("inp").addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
   document.getElementById("inp").addEventListener("input",function(){this.style.height="auto";this.style.height=Math.min(this.scrollHeight,100)+"px";});
