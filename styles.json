@@ -1,6 +1,6 @@
 {
-  "version": "1.1",
-  "generated_at": "2026-05-10T00:00:00Z",
+  "version": "1.2",
+  "generated_at": "2026-05-10T15:35:00Z",
   "source_window": {
     "start": "2026-01-01T00:00:00Z",
     "end": "2026-05-10T00:00:00Z",
@@ -65,65 +65,29 @@
       "exemplars": [
         {
           "subject": "MYMALL BOD AGENDA 06.05.2026",
-          "to": [
-            "abou26@gmail.com",
-            "gabi@dorsel.co.il",
-            "andreash@ahsgroupltd.com",
-            "nir.l@abultd.com",
-            "eyal.b@dorsel.co.il"
-          ],
-          "cc": [
-            "tomer.bitterman@mim.com.cy",
-            "liors@dorsel.co.il",
-            "athina.christodoulou@mim.com.cy"
-          ],
+          "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
+          "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"],
           "sent_at": "2026-05-02",
           "body": "Dear All\n\nFurther to our Board Meeting on 06/05/2026, please find attached the agenda in regards to the topics of discussion.\n\nKindly advise whether you may want to include any further matters in the agenda for discussion.\n\nThank you.\n\nBest Regards"
         },
         {
           "subject": "Re: MYMALL BOD AGENDA 06.05.2026 (revised, with dividends)",
-          "to": [
-            "abou26@gmail.com",
-            "gabi@dorsel.co.il",
-            "andreash@ahsgroupltd.com",
-            "nir.l@abultd.com",
-            "eyal.b@dorsel.co.il"
-          ],
-          "cc": [
-            "tomer.bitterman@mim.com.cy",
-            "liors@dorsel.co.il",
-            "athina.christodoulou@mim.com.cy"
-          ],
+          "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
+          "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"],
           "sent_at": "2026-05-05",
           "body": "Dear All\n\nFurther to our BOD Meeting tomorrow, please find attached the revised agenda including the distribution of 2mln euro dividends.\n\nThank you.\n\nBest Regards"
         },
         {
           "subject": "Re: MYMALL BOD AGENDA 06.05.2026 (resolutions for approval)",
-          "to": [
-            "abou26@gmail.com",
-            "gabi@dorsel.co.il",
-            "andreash@ahsgroupltd.com",
-            "nir.l@abultd.com",
-            "eyal.b@dorsel.co.il"
-          ],
-          "cc": [
-            "tomer.bitterman@mim.com.cy",
-            "liors@dorsel.co.il",
-            "athina.christodoulou@mim.com.cy"
-          ],
+          "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
+          "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"],
           "sent_at": "2026-05-07",
           "body": "Dear All\n\nFurther to our BOD Meeting yesterday, please find attached the resolutions for your review and approval.\n\nThank you.\n\nBest Regards"
         },
         {
           "subject": "Shareholder's Report [Month] YYYY (template)",
-          "to": [
-            "abou26@gmail.com",
-            "gabi@dorsel.co.il",
-            "andreash@ahsgroupltd.com",
-            "nir.l@abultd.com",
-            "eyal.b@dorsel.co.il"
-          ],
-          "cc": ["tomer.bitterman@mim.com.cy", "liors@dorsel.co.il"],
+          "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
+          "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il"],
           "sent_at": "2026-04-29",
           "body": "Dear All\n\nI hope this email finds you well. Please find attached the monthly shareholder's report for [Month] YYYY.\n\nFor any clarifications needed, please let me know to assist.\n\nThank you.\n\nBest Regards"
         },
@@ -201,24 +165,26 @@
       ]
     },
     "external": {
-      "description": "Suppliers, tenants, bankers, professional services (auditors, lawyers, insurance), partners. Includes: KONE Elevators, Bank of Cyprus, Eurolife, EY (Michal David, Yolit), AHS Group, RiskMan Consultants, retail partners (Crocs/CAPS, 2XM), etc.",
+      "description": "Suppliers, tenants, bankers, professional services (auditors, lawyers, insurance), partners. Includes: KONE Elevators, Bank of Cyprus, Eurolife, EY (Michal David, Yolit), AHS Group, RiskMan Consultants, retail partners (Crocs/CAPS, 2XM), etc. TONE: Conversational and friendly — closer to how Jack writes to a colleague who happens to be at another company than to a formal business correspondent. Notably LESS formal than internal/board emails. Short, direct, human. Think colleague-tone, not lawyer-tone.",
       "style_rules": [
-        "Open with 'Hi [FirstName]' — first name only. Use 'Dear [FirstName]' when extra formality is appropriate (initial outreach, sensitive matters).",
-        "When acknowledging an external email: 'Thank you for your email.' is a standard opener.",
-        "When delegating to internal staff in the same email: '@[Name] please respond to [Person], on the below.' (uses Outlook @ mentions)",
-        "Provide context for the delegate so the recipient understands the handoff: 'I am copying on this email, [Name], who is our [role] and he/she is responsible to address [topic].'",
+        "TOP PRIORITY: lean casual. Short sentences. Contractions are fine ('we're', 'it's', 'I'm', 'you'll'). Get to the point. Avoid stiff business-school phrasing.",
+        "Open with 'Hi [FirstName]' — first name only. Reserve 'Dear [FirstName]' ONLY for first-time outreach to senior people or genuinely sensitive matters; default is 'Hi'.",
+        "Acknowledging an external email: 'Thanks' or 'Thank you' is enough — not the full 'Thank you for your email.' unless it's a formal first reply.",
+        "When delegating to internal staff: a brief loop-in is enough. Style: 'Looping in [Name] — he/she will handle the [topic].' Then '@[Name] please respond to [Person] on the below.' Don't over-explain the role/hierarchy unless the recipient genuinely doesn't know who they are.",
+        "AVOID phrases like 'I am copying on this email, X, who is our Y and he is responsible to address Z' — that reads as too formal. Replace with the shorter loop-in style above.",
+        "AVOID 'kindly', 'please be advised', 'as per our discussion', 'going forward', 'at your earliest convenience' — these are corporate-speak Jack does not use with externals.",
         "With Greek-Cypriot contacts (Cyprus-based suppliers/tenants), Greeklish (Greek transliterated to Latin script) is acceptable and expected — e.g. 'Nicola m molis exo dei to minima su. Se euxaristoume gia tin sinergasia.'",
         "Sign off with 'Best Regards'.",
         "When responding with structured business info, use a clean numbered or bulleted layout: 'Company HE Number / Tiffany Investments Limited HE 146855 / MIM Services Limited HE 214159...'",
-        "Be transparent and direct about constraints, deadlines, and decisions — professional but not stiff."
+        "Be transparent and direct about constraints, deadlines, and decisions — friendly but not stiff."
       ],
       "exemplars": [
         {
-          "subject": "Re: [EXT] My Mall Limassol — Crocs shop questions",
+          "subject": "Re: My Mall Limassol — Crocs shop questions",
           "to": ["mitsakos@2xm.eu", "david.wood@mim.com.cy"],
           "cc": ["tomer.bitterman@mim.com.cy"],
           "sent_at": "2026-01-02",
-          "body": "Hi George\n\nThank you for your email. I am copying on this email, David Wood, who is our facility manager and he is responsible to address the below technical questions about the unit.\n\n@David Wood please respond to George, on the below. It's about the new shop Crocs.\n\nBest Regards"
+          "body": "Hi George\n\nThanks. Looping in David Wood — he's our facility manager and will handle the technical side.\n\n@David Wood please respond to George on the below — it's about the Crocs shop.\n\nBest Regards"
         },
         {
           "subject": "Re: Departure from EUROLIFE (Greeklish)",
