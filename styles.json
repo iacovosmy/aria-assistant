@@ -1,10 +1,10 @@
 {
-  "version": "1.2",
-  "generated_at": "2026-05-10T15:35:00Z",
+  "version": "1.3",
+  "generated_at": "2026-05-10T16:50:00Z",
   "source_window": {
     "start": "2026-01-01T00:00:00Z",
-    "end": "2026-05-10T00:00:00Z",
-    "note": "Initial seed profile derived from a sample of Jack's 2026 sent items. Re-run aria_style_profiler.py to refresh from the full corpus."
+    "end": "2026-05-10T20:00:00Z",
+    "note": "Refreshed by Aria from live Sent Items via Microsoft 365 MCP. Categories preserved from v1.2 with one fresher exemplar each. per_recipient_overrides now populated from actual recent threads."
   },
   "owner": {
     "email": "iacovos.mylonas@mim.com.cy",
@@ -20,7 +20,7 @@
   },
   "categories": {
     "internal": {
-      "description": "Colleagues at MIM (@mim.com.cy) — Athina Christodoulou, Panagiotis Christofidis, David Wood, Tomer Bitterman, Elena Christodoulou, etc.",
+      "description": "Colleagues at MIM (@mim.com.cy) — Athina Christodoulou, Panagiotis Christofidis, David Wood, Tomer Bitterman, Christina Mavrou, Elena Christodoulou, etc.",
       "style_rules": [
         "Often forward an email with a single instruction line — no greeting, no closing pleasantries.",
         "Direct, action-oriented openers: 'please speak with X to arrange the below', 'Attached is...', 'We will pay X for Y...', 'Please find attached'.",
@@ -30,6 +30,12 @@
         "Sign off with 'Best Regards'."
       ],
       "exemplars": [
+        {
+          "subject": "OLD CAR WASH LOT SIGNING AND NEW CAR WASH LA SINGING",
+          "to": ["christina.mavrou@mim.com.cy"],
+          "sent_at": "2026-05-08",
+          "body": "Christina m\n\nOn Tuesday 12/5 at 11:00 am we need to sign the below agreements:\n\n  1. Old car wash LOT\n  2. New Car Wash LA\n\nThese agreements need to be back to back. - we cannot sign a new LA without the LOT.\n\nI already send you an invitation.\n\nBest Regards"
+        },
         {
           "subject": "Bettermap payments",
           "to": ["athina.christodoulou@mim.com.cy", "panagiotis.christofidis@mim.com.cy"],
@@ -41,12 +47,6 @@
           "to": ["athina.christodoulou@mim.com.cy", "panagiotis.christofidis@mim.com.cy"],
           "sent_at": "2026-01-02",
           "body": "please speak with Monica to arrange the below.\n\nBest Regards"
-        },
-        {
-          "subject": "Fw: Invoice from KONE Elevators",
-          "to": ["athina.christodoulou@mim.com.cy", "panagiotis.christofidis@mim.com.cy"],
-          "sent_at": "2026-01-02",
-          "body": "Best Regards"
         }
       ]
     },
@@ -64,20 +64,6 @@
       ],
       "exemplars": [
         {
-          "subject": "MYMALL BOD AGENDA 06.05.2026",
-          "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
-          "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"],
-          "sent_at": "2026-05-02",
-          "body": "Dear All\n\nFurther to our Board Meeting on 06/05/2026, please find attached the agenda in regards to the topics of discussion.\n\nKindly advise whether you may want to include any further matters in the agenda for discussion.\n\nThank you.\n\nBest Regards"
-        },
-        {
-          "subject": "Re: MYMALL BOD AGENDA 06.05.2026 (revised, with dividends)",
-          "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
-          "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"],
-          "sent_at": "2026-05-05",
-          "body": "Dear All\n\nFurther to our BOD Meeting tomorrow, please find attached the revised agenda including the distribution of 2mln euro dividends.\n\nThank you.\n\nBest Regards"
-        },
-        {
           "subject": "Re: MYMALL BOD AGENDA 06.05.2026 (resolutions for approval)",
           "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
           "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"],
@@ -85,25 +71,18 @@
           "body": "Dear All\n\nFurther to our BOD Meeting yesterday, please find attached the resolutions for your review and approval.\n\nThank you.\n\nBest Regards"
         },
         {
+          "subject": "MYMALL BOD AGENDA 06.05.2026",
+          "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
+          "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"],
+          "sent_at": "2026-05-02",
+          "body": "Dear All\n\nFurther to our Board Meeting on 06/05/2026, please find attached the agenda in regards to the topics of discussion.\n\nKindly advise whether you may want to include any further matters in the agenda for discussion.\n\nThank you.\n\nBest Regards"
+        },
+        {
           "subject": "Shareholder's Report [Month] YYYY (template)",
           "to": ["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"],
           "cc": ["tomer.bitterman@mim.com.cy","liors@dorsel.co.il"],
           "sent_at": "2026-04-29",
           "body": "Dear All\n\nI hope this email finds you well. Please find attached the monthly shareholder's report for [Month] YYYY.\n\nFor any clarifications needed, please let me know to assist.\n\nThank you.\n\nBest Regards"
-        },
-        {
-          "subject": "Re: BOD AGENDA — chasing signatures",
-          "to": ["michal.david@il.ey.com"],
-          "cc": [],
-          "sent_at": "2026-02-25",
-          "body": "Hi Michal\n\nDo we have any update over the signature of the resolutions from Nir and Zahi?\n\nPlease advise.\n\nThank you.\n\nBest Regards"
-        },
-        {
-          "subject": "Re: Shareholder's Report — clarification reply to Gabi",
-          "to": ["gabi@dorsel.co.il"],
-          "cc": [],
-          "sent_at": "2026-03-02",
-          "body": "Dear Gabi\n\nTo clarify your query below, please note that we are projecting to have higher income this year in comparison with last year.\n\nThe reason why on the last page is [explanation continues...]\n\nThank you.\n\nBest Regards"
         }
       ]
     },
@@ -121,64 +100,53 @@
       ],
       "exemplars": [
         {
-          "subject": "Re: Cash flow information.xlsx",
-          "to": ["liors@dorsel.co.il"],
-          "cc": [],
-          "sent_at": "2026-04-30",
-          "body": "Hi Lior\n\nAttached the requested information. Thank you.\n\nBest Regards"
-        },
-        {
-          "subject": "Re: Needed information",
-          "to": ["liors@dorsel.co.il"],
-          "cc": [],
-          "sent_at": "2026-05-05",
-          "body": "Hi Lior\n\nNo taxes were paid during the Q1 2026 nor Q1 2025.\n\nBest Regards"
-        },
-        {
-          "subject": "Fixed Asset Movement Q1 2026",
-          "to": ["liors@dorsel.co.il"],
-          "cc": [],
-          "sent_at": "2026-05-05",
-          "body": "Hi Lior\n\nAttached you may find the analysis for the fixed asset movement for Q1 2026.\n\nThank you.\n\nBest Regards"
-        },
-        {
-          "subject": "10MLN DISTRIBUTION WORKING",
-          "to": ["liors@dorsel.co.il", "nir.l@abultd.com"],
-          "cc": [],
-          "sent_at": "2026-04-27",
-          "body": "Hi Both\n\nPlease find attached a working regarding the distribution of 10mln.\n\nI will send a team's meeting invitation to go through and finalise it.\n\nThank you.\n\nBest Regards"
-        },
-        {
-          "subject": "Re: MONTHLY CONSULTANCE FEE 10K (chase)",
+          "subject": "Re: MONTHLY CONSULTANCE FEE 10K",
           "to": ["tomer.bitterman@mim.com.cy", "nir.l@abultd.com"],
-          "cc": [],
           "sent_at": "2026-05-08",
           "body": "Hi Tomer and Nir\n\nDo we have any update regarding the below request?\n\nPlease advise.\n\nThank you.\n\nBest Regards"
         },
         {
-          "subject": "Re: model questions to Nir",
-          "to": ["nir.l@abultd.com"],
-          "cc": [],
+          "subject": "Re: Cash flow information.xlsx",
+          "to": ["liors@dorsel.co.il"],
+          "sent_at": "2026-04-30",
+          "body": "Hi Lior\n\nAttached the requested information. Thank you.\n\nBest Regards"
+        },
+        {
+          "subject": "10MLN DISTRIBUTION WORKING",
+          "to": ["liors@dorsel.co.il", "nir.l@abultd.com"],
           "sent_at": "2026-04-27",
-          "body": "Hi Nir\n\nCan we have a call to discuss the below for some clarifications?\n\nPlease note that the corporation tax is 15% on the profits.\n\nIn regards to the residential, all the [continues briefly]...\n\nThank you.\n\nBest Regards"
+          "body": "Hi Both\n\nPlease find attached a working regarding the distribution of 10mln.\n\nI will send a team's meeting invitation to go through and finalise it.\n\nThank you.\n\nBest Regards"
         }
       ]
     },
     "external": {
-      "description": "Suppliers, tenants, bankers, professional services (auditors, lawyers, insurance), partners. Includes: KONE Elevators, Bank of Cyprus, Eurolife, EY (Michal David, Yolit), AHS Group, RiskMan Consultants, retail partners (Crocs/CAPS, 2XM), etc. TONE: Conversational and friendly — closer to how Jack writes to a colleague who happens to be at another company than to a formal business correspondent. Notably LESS formal than internal/board emails. Short, direct, human. Think colleague-tone, not lawyer-tone.",
+      "description": "Suppliers, tenants, bankers, professional services (auditors, lawyers, insurance), partners. Includes: KONE Elevators, Bank of Cyprus, Eurolife, EY (Michal David, Yolit), AHS Group, RiskMan Consultants, retail partners (Crocs/CAPS, 2XM), recruiters, etc. TONE: Conversational and friendly — closer to how Jack writes to a colleague who happens to be at another company than to a formal business correspondent. Notably LESS formal than internal/board emails. Short, direct, human. Think colleague-tone, not lawyer-tone.",
       "style_rules": [
         "TOP PRIORITY: lean casual. Short sentences. Contractions are fine ('we're', 'it's', 'I'm', 'you'll'). Get to the point. Avoid stiff business-school phrasing.",
         "Open with 'Hi [FirstName]' — first name only. Reserve 'Dear [FirstName]' ONLY for first-time outreach to senior people or genuinely sensitive matters; default is 'Hi'.",
         "Acknowledging an external email: 'Thanks' or 'Thank you' is enough — not the full 'Thank you for your email.' unless it's a formal first reply.",
         "When delegating to internal staff: a brief loop-in is enough. Style: 'Looping in [Name] — he/she will handle the [topic].' Then '@[Name] please respond to [Person] on the below.' Don't over-explain the role/hierarchy unless the recipient genuinely doesn't know who they are.",
-        "AVOID phrases like 'I am copying on this email, X, who is our Y and he is responsible to address Z' — that reads as too formal. Replace with the shorter loop-in style above.",
+        "AVOID phrases like 'I am copying on this email, X, who is our Y and he is responsible to address Z' — that reads as too formal.",
         "AVOID 'kindly', 'please be advised', 'as per our discussion', 'going forward', 'at your earliest convenience' — these are corporate-speak Jack does not use with externals.",
-        "With Greek-Cypriot contacts (Cyprus-based suppliers/tenants), Greeklish (Greek transliterated to Latin script) is acceptable and expected — e.g. 'Nicola m molis exo dei to minima su. Se euxaristoume gia tin sinergasia.'",
+        "When chasing externals: 'Hi [Name] / Any update on the below? / Please advise. / Thank you. / Best Regards' — that's the entire body, often.",
+        "With Greek-Cypriot contacts (Cyprus-based suppliers/tenants), Greeklish (Greek transliterated to Latin script) is acceptable and expected.",
         "Sign off with 'Best Regards'.",
         "When responding with structured business info, use a clean numbered or bulleted layout: 'Company HE Number / Tiffany Investments Limited HE 146855 / MIM Services Limited HE 214159...'",
         "Be transparent and direct about constraints, deadlines, and decisions — friendly but not stiff."
       ],
       "exemplars": [
+        {
+          "subject": "Re: GRS - CV of a Facility Assistant Manager",
+          "to": ["alex@grsrecruitment.com"],
+          "sent_at": "2026-05-10",
+          "body": "Hi Alex\n\nThe candidate has not the relevant experience we need for the mall.\n\nThank you.\n\nBest Regards"
+        },
+        {
+          "subject": "Re: PROPOSAL FOR GOODS LIFT - MZ FLOOR",
+          "to": ["mitsakos@2xm.eu"],
+          "sent_at": "2026-05-02",
+          "body": "Hi George\n\nAny update on the below?\n\nPlease advise.\n\nThank you.\n\nBest Regards"
+        },
         {
           "subject": "Re: My Mall Limassol — Crocs shop questions",
           "to": ["mitsakos@2xm.eu", "david.wood@mim.com.cy"],
@@ -192,37 +160,145 @@
           "cc": ["athina.christodoulou@mim.com.cy"],
           "sent_at": "2026-01-02",
           "body": "Nicola m molis exo dei to minima su. Se euxaristoume gia tin sinergasia ke gia olo to support pu mas exeis dosei!\n\nEuxome oti kalitero stin nea su thesi. Christo mas euxome mia kali sinergasia.\n\nBest Regards"
-        },
-        {
-          "subject": "Re: companies details (response to Yolit at Dorsel)",
-          "to": ["yolits@dorsel.co.il"],
-          "cc": [],
-          "sent_at": "2026-05-07",
-          "body": "Hi Yolit\n\nPlease find below the information requested.\n\nCompany / HE Number\nTiffany Investments Limited / HE 146855\nMIM Services Limited / HE 214159\nPearland Investments Limited / HE [continues]\n\nThank you.\n\nBest Regards"
-        },
-        {
-          "subject": "Re: Classification of electricity and cooling income (to EY auditor)",
-          "to": ["michal.david@il.ey.com"],
-          "cc": [],
-          "sent_at": "2026-05-07",
-          "body": "Hi Michal\n\nThe legal point of view is the following:\n\nTiffany is legally obliged to the supplier that provides the electricity.\n\nHowever, based on the license agreement, MIM is [continues with technical/legal explanation].\n\nBest Regards"
         }
       ]
     }
   },
   "per_recipient_overrides": {
-    "_note": "Populated automatically by aria_style_profiler.py on first full run. Top ~30 external recipients get their own per-person profile (preferred greeting, prior conversation samples, language Greeklish/English, recurring topics). This section will be empty on this seed file — re-run the script to populate it.",
-    "examples_to_expect": {
-      "michal.david@il.ey.com": "EY auditor — English, professional, often discussing accounting classification questions; opens with 'Hi Michal'.",
-      "liors@dorsel.co.il": "see inner_circle category (overrides not needed — covered by category)",
-      "nir.l@abultd.com": "see inner_circle category",
-      "mitsakos@2xm.eu": "Greek retail partner (2XM/Crocs) — opens 'Hi George', often delegates to David Wood for facility matters.",
-      "monica.odysseos@bankofcyprus.com": "Bank of Cyprus contact — handles letters of guarantee; tone professional, short."
+    "_note": "Populated from live Sent Items via M365 MCP on 2026-05-10. These per-person profiles override the category default when Aria is drafting to one of these recipients.",
+    "michal.david@il.ey.com": {
+      "preferred_greeting": "Hi Michal",
+      "language": "English",
+      "context": "EY auditor — frequent during audit season. Topics: TB/GL data requests, accounting classification questions, MIM review. Replies are very short, often just 'Attached. Thank you. Best Regards.' Sometimes provides multi-paragraph legal/technical explanation when the question requires it.",
+      "exemplars": [
+        {
+          "subject": "Re: Data extraction - My Mall companies",
+          "sent_at": "2026-05-10",
+          "body": "Hi Michal\n\nAttached the TB/GL for Q1 2026 & 2025 per company.\n\nThank you.\n\nBest Regards"
+        },
+        {
+          "subject": "Re: MIM - Review 3/2026",
+          "sent_at": "2026-05-09",
+          "body": "Hi Michal\n\nAttached. Thank you.\n\nBest Regards"
+        },
+        {
+          "subject": "Re: Classification of electricity and cooling income",
+          "sent_at": "2026-05-07",
+          "body": "Hi Michal\n\nThe legal point of view is the following:\n\nTiffany is legally obliged to the supplier that provides the electricity.\n\nHowever, based on the license agreement, MIM is [explanation continues with the technical/legal detail].\n\nBest Regards"
+        }
+      ]
+    },
+    "mitsakos@2xm.eu": {
+      "preferred_greeting": "Hi George",
+      "language": "English",
+      "context": "George Mitsakos at 2XM (Crocs retail partner). Topics: shop fit-out, lift proposal, license agreements, bank guarantees. Style: short, direct chases when waiting for decisions. Often delegates technical questions to David Wood (facility manager). Sometimes formal 'Dear George' for proposal-level matters.",
+      "exemplars": [
+        {
+          "subject": "Re: PROPOSAL FOR GOODS LIFT - MZ FLOOR",
+          "sent_at": "2026-05-02",
+          "body": "Hi George\n\nAny update on the below?\n\nPlease advise.\n\nThank you.\n\nBest Regards"
+        },
+        {
+          "subject": "Re: PROPOSAL FOR GOODS LIFT - MZ FLOOR (formal chase)",
+          "sent_at": "2026-04-29",
+          "body": "Dear George\n\nDo you have any update on the below proposal?\n\nPlease advise.\n\nThank you.\n\nBest Regards"
+        },
+        {
+          "subject": "Re: Κατάθεση 15/3/26 - Crocs",
+          "sent_at": "2026-02-10",
+          "body": "Hi George\n\nThe below request is approved conditional that we will have the bank guarantee on time.\n\nThank you.\n\nBest Regards"
+        }
+      ]
+    },
+    "liors@dorsel.co.il": {
+      "preferred_greeting": "Hi Lior",
+      "language": "English",
+      "context": "Lior Som — financial inner circle. Cash flow, consolidated reporting, fixed asset analysis. Extremely brief, often single-line replies. 'Attached.' is a complete email to him. Trust + brevity.",
+      "exemplars": [
+        {
+          "subject": "Re: Cash flow information.xlsx",
+          "sent_at": "2026-04-30",
+          "body": "Hi Lior\n\nAttached the requested information. Thank you.\n\nBest Regards"
+        },
+        {
+          "subject": "Re: Needed information",
+          "sent_at": "2026-05-05",
+          "body": "Hi Lior\n\nNo taxes were paid during the Q1 2026 nor Q1 2025.\n\nBest Regards"
+        },
+        {
+          "subject": "Fixed Asset Movement Q1 2026",
+          "sent_at": "2026-05-05",
+          "body": "Hi Lior\n\nAttached you may find the analysis for the fixed asset movement for Q1 2026.\n\nThank you.\n\nBest Regards"
+        }
+      ]
+    },
+    "nir.l@abultd.com": {
+      "preferred_greeting": "Hi Nir",
+      "language": "English",
+      "context": "Nir Lahiani — financial inner circle. Topics: dividend distributions, valuation models, tax. When emailing both Nir and Tomer together: 'Hi Tomer and Nir'. Brief, technical, no fluff.",
+      "exemplars": [
+        {
+          "subject": "Re: model questions to Nir",
+          "sent_at": "2026-04-27",
+          "body": "Hi Nir\n\nCan we have a call to discuss the below for some clarifications?\n\nPlease note that the corporation tax is 15% on the profits.\n\nIn regards to the residential, all the [continues briefly]...\n\nThank you.\n\nBest Regards"
+        },
+        {
+          "subject": "Re: MONTHLY CONSULTANCE FEE 10K (chase)",
+          "sent_at": "2026-05-08",
+          "body": "Hi Tomer and Nir\n\nDo we have any update regarding the below request?\n\nPlease advise.\n\nThank you.\n\nBest Regards"
+        }
+      ]
+    },
+    "yolits@dorsel.co.il": {
+      "preferred_greeting": "Hi Yolit",
+      "language": "English",
+      "context": "Yolit at Dorsel — info requests on entities/HE numbers/structural details. Style: 'Hi Yolit / Please find below the information requested.' followed by clean tabular layout. Closes 'Thank you. Best Regards'.",
+      "exemplars": [
+        {
+          "subject": "Re: companies details",
+          "sent_at": "2026-05-07",
+          "body": "Hi Yolit\n\nPlease find below the information requested.\n\nCompany HE Number\nTiffany Investments Limited HE 146855\nMIM Services Limited HE 214159\nPearland Investments Limited HE [continues]\n\nThank you.\n\nBest Regards"
+        }
+      ]
+    },
+    "alex@grsrecruitment.com": {
+      "preferred_greeting": "Hi Alex",
+      "language": "English",
+      "context": "Recruiter at GRS Recruitment — sends candidate CVs. Style: very short, direct yes/no on candidates. 'The candidate has not the relevant experience we need for the mall.' is a typical reply.",
+      "exemplars": [
+        {
+          "subject": "Re: GRS - CV of a Facility Assistant Manager",
+          "sent_at": "2026-05-10",
+          "body": "Hi Alex\n\nThe candidate has not the relevant experience we need for the mall.\n\nThank you.\n\nBest Regards"
+        }
+      ]
+    },
+    "christina.mavrou@mim.com.cy": {
+      "preferred_greeting": "Christina m",
+      "language": "English (with Greeklish casual touches)",
+      "context": "Christina Mavrou at MIM — internal colleague. Topics: agreement signings, scheduling. Style: opens 'Christina m' (casual nickname affix). Direct briefings with numbered lists for agreements. Close with 'Best Regards'.",
+      "exemplars": [
+        {
+          "subject": "OLD CAR WASH LOT SIGNING AND NEW CAR WASH LA SINGING",
+          "sent_at": "2026-05-08",
+          "body": "Christina m\n\nOn Tuesday 12/5 at 11:00 am we need to sign the below agreements:\n\n  1. Old car wash LOT\n  2. New Car Wash LA\n\nThese agreements need to be back to back. - we cannot sign a new LA without the LOT.\n\nI already send you an invitation.\n\nBest Regards"
+        }
+      ]
+    },
+    "monica.odysseos@bankofcyprus.com": {
+      "preferred_greeting": "Hi Monica",
+      "language": "English",
+      "context": "Bank of Cyprus contact handling letters of guarantee. Tone: professional, short, transactional."
+    },
+    "tomer.bitterman@mim.com.cy": {
+      "preferred_greeting": "Hi Tomer",
+      "language": "English",
+      "context": "Internal MIM colleague. Often paired with Nir on financial matters — when emailing both, use 'Hi Tomer and Nir'."
     }
   },
   "drafting_instructions_for_aria": {
-    "before_drafting": "ALWAYS classify the recipient(s) into one of the four categories using the rules in this file (internal / board / inner_circle / external). Then load the matching category profile.",
-    "use_exemplars_as_few_shot": "When generating an email, include 2-3 of the matching category's exemplars in your prompt as in-context examples. Mirror their structure, length, and register — not their content.",
+    "before_drafting": "ALWAYS classify the recipient(s) into one of the four categories using the rules in this file (internal / board / inner_circle / external). Then load the matching category profile. If a recipient has a per_recipient_override, that takes precedence over the category default.",
+    "use_exemplars_as_few_shot": "When generating an email, include 2-3 of the matching category's exemplars in your prompt as in-context examples. Mirror their structure, length, and register — not their content. If a per_recipient_override exists, use ITS exemplars first.",
     "respect_brevity": "Jack's strongest preference across ALL categories is brevity. When in doubt between long and short, choose short. He would rather send a one-line email than a polished paragraph.",
     "signature": "End every email with 'Best Regards' on its own line, with a blank line above it. Do not add a name, title, or footer — Outlook handles that.",
     "language": "Default to English. Use Greeklish only if the recipient is a Cyprus-based contact AND there is precedent in the exemplars or per-recipient overrides for Greeklish with that person.",
