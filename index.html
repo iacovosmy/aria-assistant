@@ -304,17 +304,31 @@ function getM365Context(txt,cb){
   });
   Object.keys(mentionedContacts).slice(0,3).forEach(function(name){
     var email = mentionedContacts[name];
+    var fromInboxFilterUrl = "me/mailFolders/inbox/messages?$top=30&$filter="+encodeURIComponent("from/emailAddress/address eq '"+email+"'")+"&$select=subject,from,toRecipients,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc";
     promises.push(
-      searchEmails("from:"+email, 15).then(function(emails){
-        if(!emails.length)return "[Targeted: "+name+" ("+email+") — NO emails from this person found in mailbox]";
-        return "[Targeted: "+name+" ("+email+") — last "+emails.length+" emails FROM this person, across entire mailbox]\n"+emails.map(function(e){return formatEmailLine(e,true);}).join("\n");
+      graphFetch(fromInboxFilterUrl).then(function(d){
+        if(!d.value||!d.value.length)return "[Targeted: "+name+" ("+email+") — NO emails FROM this person in inbox]";
+        return "[Targeted: "+name+" ("+email+") — full FROM-history (last "+d.value.length+", newest first, complete inbox)]\n"+d.value.map(function(e){return formatEmailLine(e,true);}).join("\n");
       }).catch(function(e){return "[Targeted-from "+name+"] error: "+e.message;})
     );
+    var sentToFilterUrl = "me/mailFolders/sentItems/messages?$top=30&$filter="+encodeURIComponent("toRecipients/any(r:r/emailAddress/address eq '"+email+"')")+"&$select=subject,toRecipients,sentDateTime,bodyPreview&$orderby=sentDateTime desc";
     promises.push(
-      searchEmails("to:"+email, 15).then(function(emails){
-        if(!emails.length)return "[Targeted: "+name+" ("+email+") — NO emails Jack sent to this person]";
-        return "[Targeted: "+name+" ("+email+") — last "+emails.length+" emails Jack SENT TO this person, across entire mailbox]\n"+emails.map(function(e){return formatEmailLine(e,false);}).join("\n");
+      graphFetch(sentToFilterUrl).then(function(d){
+        if(!d.value||!d.value.length)return "[Targeted: "+name+" ("+email+") — NO emails Jack sent TO this person]";
+        return "[Targeted: "+name+" ("+email+") — full SENT-TO history (last "+d.value.length+", newest first, complete sent items)]\n"+d.value.map(function(e){return formatEmailLine(e,false);}).join("\n");
       }).catch(function(e){return "[Targeted-to "+name+"] error: "+e.message;})
+    );
+    promises.push(
+      searchEmails("from:"+email, 25).then(function(emails){
+        if(!emails.length)return "";
+        return "[Targeted: "+name+" — FROM full-mailbox search (any folder, "+emails.length+" hits)]\n"+emails.map(function(e){return formatEmailLine(e,true);}).join("\n");
+      }).catch(function(){return "";})
+    );
+    promises.push(
+      searchEmails("to:"+email, 25).then(function(emails){
+        if(!emails.length)return "";
+        return "[Targeted: "+name+" — TO full-mailbox search (any folder, "+emails.length+" hits)]\n"+emails.map(function(e){return formatEmailLine(e,false);}).join("\n");
+      }).catch(function(){return "";})
     );
   });
   var contactNames = new Set(Object.keys(KNOWN_CONTACTS));
@@ -577,13 +591,15 @@ function callClaude(){
       +"The LIVE M365 DATA section at the bottom contains FOUR types of pre-fetched results, available on EVERY message:\n"
       +"  1. Inbox — the last ~25 emails Iacovos received\n"
       +"  2. Sent Items — the last ~20 emails Iacovos sent\n"
-      +"  3. Targeted person blocks — when Iacovos mentions a known contact's name, the system pulls their last 15 emails FROM and 15 emails Iacovos sent TO them, ACROSS HIS ENTIRE MAILBOX (not just recent 25). These are labelled '[Targeted: <name> (<email>) — ...]'.\n"
+      +"  3. Targeted person blocks — when Iacovos mentions a known contact's name, the system pulls the LAST 30 emails FROM that person in his inbox + LAST 30 emails Iacovos sent TO them in sent items, ALL date-ordered newest-first, PLUS a full-mailbox $search across any folder. Labelled '[Targeted: <name> ...]'. This is a complete picture of recent correspondence — do NOT claim 'I have no visibility' if these blocks exist.\n"
       +"  4. Topic-keyword blocks — distinctive words from Iacovos's message (e.g. 'lift', 'elevator', 'invoice') trigger a full-mailbox search. Labelled '[Topic search '<word>' — ...]'.\n\n"
       +"RULES FOR READING THE DATA:\n"
-      +"  - READ EVERY LINE in the targeted person blocks — they're the last 15 emails from that specific person across his entire mailbox, not a 'recent only' window. The relevant email may be from weeks ago.\n"
+      +"  - READ EVERY LINE in the targeted person blocks — they're the last 30 emails from that specific person across his entire mailbox, not a 'recent only' window. The relevant email may be from weeks ago.\n"
       +"  - SOME EMAILS ARE IN GREEK OR GREEKLISH (Cypriot business contacts often write that way). Read them. Greek phrases like 'θα σου απαντήσω' (= 'I'll answer you'), 'Θετική θα είμαστε' (= 'we'll be positive'), 'αύριο' (= 'tomorrow'), 'ευχαριστώ' (= 'thanks') often signal commitments, deferred decisions, or pending replies. Do NOT dismiss non-English emails.\n"
       +"  - When chasing someone, look at the LATEST EMAIL FROM that person AND the LATEST EMAIL Iacovos SENT TO them. If their latest email defers a decision ('I'll answer tomorrow', 'will revert next week', 'let me check and get back'), that IS the chase target — Iacovos is following up because they haven't actually answered yet.\n"
-      +"  - Subject lines often carry the topic. If Iacovos says 'lift' but the email subject says 'elevator' or 'KONE' — those are the same topic. Use semantic matching, not just literal keyword.\n\n"
+      +"  - Subject lines often carry the topic. If Iacovos says 'lift' but the email subject says 'elevator' or 'KONE' — those are the same topic. Use semantic matching, not just literal keyword.\n"
+      +"  - CRITICAL DISTINCTION — calendar acceptance is NOT a business decision. If you see 'Accepted: <meeting subject>' or 'Accepted: Discussion about X' in the inbox, this is an Outlook auto-reply meaning the person agreed to ATTEND THE MEETING. It is NOT them agreeing to the substance, NOT them giving you an answer, NOT a decision. A meeting was scheduled to discuss the topic — the actual decision is still pending until they tell you in their own words (in an email reply or in the meeting itself). When chasing, do NOT confuse a calendar acceptance with a decision. Example: if Jack asked 'what was George's decision on the lift?' and the only signal is George's calendar 'Accepted', the correct answer is 'George accepted the meeting invitation on [date] but has not actually given his decision yet — the decision was deferred to that meeting / the meeting hasn't happened yet / no email reply with the decision exists'.\n"
+      +"  - Cross-check sent-history thoroughly: Iacovos may have sent multiple emails to the same person over weeks. The decision he's chasing might relate to a thread from 2-4 weeks ago, not just the most recent one. READ all listed sent emails to this person, not only the top one.\n\n"
       +"NEVER respond with 'I don't have visibility' or 'I don't see correspondence about X' when:\n"
       +"  - The targeted block for that person exists in the LIVE M365 DATA below (even if no email subject literally contains the topic word).\n"
       +"  - Show the user what you DID find: 'I see your last exchange with George was on [date] — his reply said [paraphrase, including the Greek if relevant]. He hasn't responded since. Want me to draft a chase-up?'\n"
