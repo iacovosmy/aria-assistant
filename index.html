@@ -737,39 +737,90 @@ function editOutlookCalendarEvent(args){
   });
 }
 
-// v1.11: POST /me/events/{id}/cancel with immutable ID + signature retry on failure.
+// v1.12: TWO-PHASE cancel for guaranteed removal. The v1.11 single POST /me/events/{id}/cancel had an
+// edge case where Graph would return 202 Accepted and mark the event isCancelled=true (notice sent),
+// but the event stayed visible in the user's calendar view. Self-invites especially could end up with
+// "event cancelled per Graph" but "still on calendar per user". v1.12's flow:
+//   Phase 1: POST .../cancel — sends cancellation notice to attendees
+//   Phase 2 (after 1.5s settle): GET — if event is gone (404), done. If still there, explicit DELETE.
+//   Phase 3: Final GET verification — must return 404 to claim success. Anything else surfaces ⚠️.
+// Result: attendees get the cancellation notice AND the event physically leaves the calendar.
 function cancelOutlookCalendarEvent(args){
   var body = args.comment ? {Comment: args.comment} : {};
   var sig = args._signature;
-  function doCancel(eventId){
-    return graphRequest("POST", "me/events/"+encodeURIComponent(eventId)+"/cancel", body, {immutableId: true});
-  }
-  function verifyCancel(res, eventId){
-    if(!res.ok) return res;
-    return graphRequest("GET", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true}).then(function(verify){
-      if(verify.status === 404){
-        res.actuallyCancelled = true;
-        res.verifyDetail = "event no longer exists in calendar (moved to Deleted Items)";
-      }else if(verify.body && verify.body.isCancelled){
-        res.actuallyCancelled = true;
-        res.verifyDetail = "event marked isCancelled=true";
-      }else if(verify.body){
-        res.actuallyCancelled = false;
-        res.warning = "Cancel HTTP "+res.status+" returned but verification GET shows event still active. Graph may be processing async — recheck in 30s.";
-      }else{
-        res.actuallyCancelled = true;
-        res.verifyDetail = "could not verify (GET status "+verify.status+") — relying on initial HTTP "+res.status;
+
+  function fullCancelFlow(eventId){
+    var enc = encodeURIComponent(eventId);
+    // Phase 1: cancel (sends notice)
+    return graphRequest("POST", "me/events/"+enc+"/cancel", body, {immutableId: true}).then(function(cancelRes){
+      if(!cancelRes.ok){
+        // Cancel itself failed — return raw failure to caller for signature fallback
+        return {
+          ok: false,
+          status: cancelRes.status,
+          body: cancelRes.body,
+          raw: cancelRes.raw,
+          actuallyCancelled: false,
+          phase: "cancel"
+        };
       }
-      return res;
+      // Phase 2: wait for Graph to process, then check if event is still there
+      return new Promise(function(r){ setTimeout(r, 1500); }).then(function(){
+        return graphRequest("GET", "me/events/"+enc, null, {immutableId: true}).then(function(checkRes){
+          if(checkRes.status === 404){
+            // Event already gone — cancel did the full job
+            return {
+              ok: true,
+              status: cancelRes.status,
+              actuallyCancelled: true,
+              verifyDetail: "cancellation notice sent to attendees; event removed from calendar (verified 404 after cancel)",
+              cancelStatus: cancelRes.status
+            };
+          }
+          // Event still queryable — explicit DELETE to remove it from the calendar view.
+          // Attendees already got the cancellation notice via Phase 1.
+          return graphRequest("DELETE", "me/events/"+enc, null, {immutableId: true}).then(function(delRes){
+            // Phase 3: final verification — event MUST be 404 to claim success
+            return graphRequest("GET", "me/events/"+enc, null, {immutableId: true}).then(function(finalCheck){
+              if(finalCheck.status === 404){
+                return {
+                  ok: true,
+                  status: cancelRes.status,
+                  actuallyCancelled: true,
+                  verifyDetail: "cancellation notice sent to attendees (HTTP "+cancelRes.status+"); event then explicitly deleted from calendar (HTTP "+delRes.status+"); verified gone (final GET 404)",
+                  cancelStatus: cancelRes.status,
+                  deleteStatus: delRes.status
+                };
+              }
+              // Final verification shows event still there — honest failure
+              var isCancelled = !!(finalCheck.body && finalCheck.body.isCancelled);
+              return {
+                ok: true,
+                status: cancelRes.status,
+                actuallyCancelled: false,
+                warning: "Cancel notice was sent (HTTP "+cancelRes.status+") and DELETE was attempted (HTTP "+delRes.status+"), but the event is STILL on the calendar (final GET status "+finalCheck.status+", isCancelled="+isCancelled+"). The attendees did receive the cancellation email, but the event entry remained. Please open Outlook, find this event manually, and delete it.",
+                cancelStatus: cancelRes.status,
+                deleteStatus: delRes.status,
+                verifyStatus: finalCheck.status
+              };
+            });
+          });
+        });
+      });
     });
   }
-  return doCancel(args.eventId).then(function(res){
-    if(res.ok) return verifyCancel(res, args.eventId);
-    if((res.status===400 || res.status===404) && sig){
+
+  return fullCancelFlow(args.eventId).then(function(res){
+    if(res.actuallyCancelled === true) return res;
+    // Fallback: signature re-lookup if the eventId was stale
+    if(sig){
       return refindEventBySignature(sig).then(function(freshId){
         if(!freshId || freshId === args.eventId) return res;
-        return doCancel(freshId).then(function(res2){
-          if(res2.ok){ res2.recovered = true; res2.warning = "Initial cancel failed but recovered via signature lookup."; return verifyCancel(res2, freshId); }
+        return fullCancelFlow(freshId).then(function(res2){
+          if(res2.actuallyCancelled === true){
+            res2.recovered = true;
+            res2.warning = "Initial cancel failed (eventId may have been stale) but recovered via signature re-lookup with a fresh ID.";
+          }
           return res2;
         });
       });
@@ -786,16 +837,22 @@ function deleteOutlookCalendarEvent(args){
   }
   function verifyDelete(res, eventId){
     if(!res.ok) return res;
-    return graphRequest("GET", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true}).then(function(verify){
-      if(verify.status === 404){
-        res.actuallyDeleted = true;
-      }else if(verify.body){
-        res.actuallyDeleted = false;
-        res.warning = "Delete HTTP "+res.status+" returned but the event is still queryable via Graph (status "+verify.status+"). Either the delete didn't take, or this eventId belonged to a different event than expected.";
-      }else{
-        res.actuallyDeleted = true;
-      }
-      return res;
+    // v1.12: wait briefly for Graph to settle, then verify the event is actually gone (404)
+    return new Promise(function(r){ setTimeout(r, 800); }).then(function(){
+      return graphRequest("GET", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true}).then(function(verify){
+        if(verify.status === 404){
+          res.actuallyDeleted = true;
+          res.verifyDetail = "verified 404 — event no longer in calendar";
+        }else if(verify.body){
+          res.actuallyDeleted = false;
+          res.warning = "DELETE returned HTTP "+res.status+" but the event is STILL queryable in Graph (status "+verify.status+"). The deletion did NOT take. Most likely the eventId points to a different event than expected — please open Outlook manually to find and delete the right one.";
+        }else{
+          // v1.12: don't default to true on unknown — surface uncertainty
+          res.actuallyDeleted = false;
+          res.warning = "DELETE returned HTTP "+res.status+" but verification GET returned an unexpected status "+verify.status+" with no body. Cannot confirm whether the deletion took. Please check Outlook to verify.";
+        }
+        return res;
+      });
     });
   }
   return doDelete(args.eventId).then(function(res){
@@ -1178,21 +1235,21 @@ function callClaude(){
       }else if(cancelDir){
         var visible=reply.replace(cancelDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        addMsg("toolcal","Cancelling event"+(cancelDir.args.comment?" with note to attendees":"")+"...");
+        addMsg("toolcal","Cancelling event"+(cancelDir.args.comment?" with note to attendees":"")+" (cancel + delete + verify)...");
         var thinking=showTyping();
         cancelOutlookCalendarEvent(cancelDir.args).then(function(res){
           hideTyping(thinking);
-          if(res.ok && res.actuallyCancelled !== false){
-            var verifyTag = res.verifyDetail ? " (verified: "+res.verifyDetail+")" : "";
-            addMsg("toolcal","✅ Event cancelled (HTTP "+res.status+")"+verifyTag+". Cancellation notice sent to all attendees; event moved to Deleted Items.");
-            hist.push({role:"user",content:"[System: Calendar event cancelled successfully via Graph API. HTTP "+res.status+". "+(res.verifyDetail||"")+" Cancellation notice was sent to attendees. Confirm to Iacovos in one short sentence.]"});
-          }else if(res.ok && res.actuallyCancelled === false){
-            addMsg("toolcal","⚠️ Cancel HTTP returned but the event still appears active. "+(res.warning||""));
-            hist.push({role:"user",content:"[System: Calendar CANCEL returned HTTP "+res.status+" but post-cancel verification found the event still active. Warning: "+(res.warning||"")+". Tell Iacovos honestly that the cancel may not have taken — recommend he wait 30s and recheck Outlook, or pick a different eventId if this was the wrong event.]"});
+          if(res.actuallyCancelled === true){
+            var recoveredTag = res.recovered ? " [recovered via signature lookup]" : "";
+            addMsg("toolcal","✅ Event cancelled and removed from calendar"+recoveredTag+". "+(res.verifyDetail||""));
+            hist.push({role:"user",content:"[System: Calendar event fully cancelled. "+(res.verifyDetail||"")+" "+(res.recovered?"Note: recovered via signature re-lookup — the original eventId was stale.":"")+" Confirm to Iacovos in one short sentence — emphasise that attendees got the notice AND the event is gone from his calendar.]"});
+          }else if(res.actuallyCancelled === false && res.warning){
+            addMsg("toolcal","⚠️ "+res.warning);
+            hist.push({role:"user",content:"[System: Calendar CANCEL did NOT fully complete. "+(res.warning||"")+" Tell Iacovos honestly that the cancellation did not fully remove the event from his calendar. If attendees were already notified (Phase 1 succeeded) but the event remained on his calendar, recommend he open Outlook and delete the event manually. DO NOT claim success.]"});
           }else{
             var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
             addMsg("toolcal","❌ Event cancel failed (HTTP "+res.status+"): "+errMsg);
-            hist.push({role:"user",content:"[System: Calendar event CANCEL FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly that the cancel did not work.]"});
+            hist.push({role:"user",content:"[System: Calendar event CANCEL FAILED. HTTP "+res.status+". Error: "+errMsg+". Phase: "+(res.phase||"unknown")+". Tell Iacovos honestly that the cancel did not work and no notice was sent.]"});
           }
           callClaude();
         });
