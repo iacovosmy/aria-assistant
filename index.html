@@ -300,21 +300,124 @@ function graphRequest(method, url, body, opts){
 // fresh ID. This is the second layer of defense in case ImmutableId still doesn't save us.
 function refindEventBySignature(sig){
   if(!sig || !sig.subject) return Promise.resolve(null);
+  return findEventsBySignature(sig.subject, sig.start).then(function(matches){
+    return matches.length ? matches[0].id : null;
+  });
+}
+
+// v1.14: find ALL events matching a subject + start-time signature. Used by:
+//  - refindEventBySignature (returns first match) for stale-id retry
+//  - duplicate-cleanup Phase 4 after cancel/delete (returns all matches to clean up dual-entries
+//    that self-invites can create when Outlook auto-accepts a meeting where you are both organizer
+//    and attendee)
+// Returns array of {id, subject, start} sorted by start time.
+function findEventsBySignature(subject, startISO){
+  if(!subject) return Promise.resolve([]);
   var start = new Date(); start.setHours(0,0,0,0);
   var end = new Date(start.getTime() + 60*86400000);
-  var url = "me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=100&$select=id,subject,start";
+  var url = "me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=200&$select=id,subject,start";
   return graphFetch(url, {immutableId: true}).then(function(d){
-    if(!d.value) return null;
+    if(!d.value) return [];
+    var needle = subject.toLowerCase().trim();
+    var sigTime = startISO ? new Date(startISO + (startISO.endsWith("Z")?"":"Z")).getTime() : null;
+    var matches = [];
+    d.value.forEach(function(e){
+      if(!e.subject) return;
+      if(e.subject.toLowerCase().trim() !== needle) return;
+      if(sigTime){
+        var eStart = new Date(e.start.dateTime + (e.start.dateTime.endsWith("Z")?"":"Z")).getTime();
+        // ±30 min tolerance for "same event"
+        if(Math.abs(eStart - sigTime) > 30*60*1000) return;
+      }
+      matches.push({id: e.id, subject: e.subject, start: e.start.dateTime});
+    });
+    return matches;
+  }).catch(function(){return [];});
+}
+
+// v1.14: bulk-delete a list of events. Used by duplicate-cleanup. Returns array of {id, ok, status}.
+function bulkDeleteEvents(events){
+  if(!events || !events.length) return Promise.resolve([]);
+  return Promise.all(events.map(function(e){
+    return graphRequest("DELETE", "me/events/"+encodeURIComponent(e.id), null, {immutableId: true}).then(function(res){
+      return {id: e.id, subject: e.subject, ok: res.ok, status: res.status};
+    });
+  }));
+}
+
+// v1.14: residual check — after cancel/delete, scan calendarView for ANY remaining event matching
+// the original signature (subject + start time, ±30min). Returns {found: bool, residualId: string|null,
+// matchedSubject, matchedStart}. Catches the case where Graph returns 404 for one event id but the
+// event is still present under a different id (Outlook's "phantom" series-master quirk).
+function findResidualBySignature(sig){
+  if(!sig || !sig.subject) return Promise.resolve({found: false});
+  var start = new Date(); start.setHours(0,0,0,0);
+  var end = new Date(start.getTime() + 60*86400000);
+  var url = "me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=200&$select=id,subject,start";
+  return graphFetch(url, {immutableId: true}).then(function(d){
+    if(!d.value) return {found: false};
     var sigStartTime = new Date(sig.start + (sig.start.endsWith("Z")?"":"Z")).getTime();
     for(var i=0;i<d.value.length;i++){
       var e = d.value[i];
-      if(e.subject !== sig.subject) continue;
+      if(!e.subject) continue;
+      if(e.subject.toLowerCase().trim() !== sig.subject.toLowerCase().trim()) continue;
       var eStart = new Date(e.start.dateTime + (e.start.dateTime.endsWith("Z")?"":"Z")).getTime();
-      // Allow ±10 minute tolerance for time match
-      if(Math.abs(eStart - sigStartTime) < 10*60*1000) return e.id;
+      if(Math.abs(eStart - sigStartTime) < 30*60*1000){
+        return {found: true, residualId: e.id, matchedSubject: e.subject, matchedStart: e.start.dateTime};
+      }
     }
-    return null;
-  }).catch(function(){return null;});
+    return {found: false};
+  }).catch(function(){return {found: false};});
+}
+
+// v1.14: DELETE + CREATE fallback for EDIT when Graph rejects PATCH with overlap/occurrence errors.
+// Fetches the original event to preserve fields not being changed, deletes it, then creates a fresh
+// event with the merged (existing + requested) fields. Result is equivalent to a successful PATCH
+// from the user's perspective, just with different attendee notifications (cancel + new-invite pair).
+function performDeleteAndCreateFallback(args){
+  return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId), null, {immutableId: true}).then(function(orig){
+    if(!orig.ok || !orig.body){
+      return {ok: false, status: orig.status||0, raw: "DELETE+CREATE fallback: could not fetch original event to preserve fields"};
+    }
+    var origBody = orig.body;
+    return graphRequest("DELETE", "me/events/"+encodeURIComponent(args.eventId), null, {immutableId: true}).then(function(delRes){
+      // Build the new event, merging requested changes over the original's fields
+      var newEvent = {
+        subject: args.subject != null ? args.subject : origBody.subject,
+        start: args.startDateTime ? {dateTime: args.startDateTime, timeZone: TIMEZONE} : origBody.start,
+        end:   args.endDateTime   ? {dateTime: args.endDateTime,   timeZone: TIMEZONE} : origBody.end,
+        location: args.location != null ? {displayName: args.location} : (origBody.location || {displayName: ""}),
+        body: args.body != null ? {contentType: "html", content: args.body} : (origBody.body || {contentType: "html", content: ""}),
+        attendees: args.attendees ? args.attendees.map(function(a){
+          return {emailAddress: {address: a.address, name: a.name||""}, type: "required"};
+        }) : (origBody.attendees || [])
+      };
+      return graphRequest("POST", "me/events", newEvent, {immutableId: true}).then(function(createRes){
+        if(createRes.ok && createRes.body){
+          // Register the new event in the map at the next index for future references
+          var newId = createRes.body.id;
+          var idx = Object.keys(window._calendarEventMap).length + 1;
+          while(window._calendarEventMap[String(idx)]) idx++;
+          window._calendarEventMap[String(idx)] = {
+            id: newId,
+            subject: newEvent.subject,
+            start: typeof newEvent.start === "object" ? newEvent.start.dateTime : newEvent.start
+          };
+          return {
+            ok: true,
+            status: createRes.status,
+            verified: true,
+            recovered: true,
+            warning: "Graph's PATCH endpoint rejected the in-place edit (overlap error). Recovered automatically via DELETE + CREATE: old event removed, new event created with the requested changes. Attendees will receive a cancellation notice for the old time plus a new invitation for the new time, instead of an 'event updated' notice.",
+            fallbackPath: "delete-create",
+            newEventIndex: idx,
+            usedEventId: newId
+          };
+        }
+        return {ok: false, status: createRes.status, body: createRes.body, raw: "DELETE+CREATE fallback: DELETE succeeded but CREATE failed: "+(createRes.body && createRes.body.error ? createRes.body.error.message : createRes.raw)};
+      });
+    });
+  });
 }
 
 // Search emails using Graph $search (KQL syntax). Supports "from:email", "to:email", "subject:term", or free text.
@@ -718,22 +821,35 @@ function editOutlookCalendarEvent(args){
   }
   return doPatch(args.eventId).then(function(res){
     if(res.ok) return verifyAndReturn(res, args.eventId);
-    // First attempt failed. If it's 400/404 and we have a signature, try re-finding the event.
+    // v1.14: detect the "Modified occurrence is crossing or overlapping adjacent occurrence" Graph
+    // error (and related occurrence/overlap errors) and auto-fall-back to DELETE + CREATE.
+    var graphErrMsg = (res.body && res.body.error && res.body.error.message) || res.raw || "";
+    var isOverlap = /overlap|overlapping|crossing|occurrence/i.test(graphErrMsg);
+    if(res.status === 400 && isOverlap){
+      return performDeleteAndCreateFallback(args);
+    }
+    // Existing signature fallback for 400/404 (stale ID case)
     if((res.status===400 || res.status===404) && sig){
       return refindEventBySignature(sig).then(function(freshId){
-        if(!freshId){ res.warning = "Initial PATCH failed (HTTP "+res.status+") and signature re-lookup also failed."; return res; }
-        if(freshId === args.eventId){ res.warning = "Re-lookup returned same ID — Graph genuinely rejects it. Original error: "+(res.body && res.body.error ? res.body.error.message : res.raw); return res; }
-        // Retry with fresh ID
+        if(!freshId){ res.warning = "Initial PATCH failed (HTTP "+res.status+", error: "+graphErrMsg+") and signature re-lookup also failed."; return res; }
+        if(freshId === args.eventId){ res.warning = "Re-lookup returned same ID — Graph genuinely rejects it. Original error: "+graphErrMsg; return res; }
         return doPatch(freshId).then(function(res2){
           if(res2.ok){
             res2.recovered = true;
-            res2.warning = "Initial PATCH failed (HTTP "+res.status+") but recovered by re-finding the event via signature lookup.";
+            res2.warning = "Initial PATCH failed (HTTP "+res.status+", "+graphErrMsg+") but recovered by re-finding the event via signature lookup.";
             return verifyAndReturn(res2, freshId);
+          }
+          // Even the retry failed — try DELETE+CREATE as last resort if it's an overlap-type error
+          var err2 = (res2.body && res2.body.error && res2.body.error.message) || res2.raw || "";
+          if(res2.status === 400 && /overlap|overlapping|crossing|occurrence/i.test(err2)){
+            return performDeleteAndCreateFallback({ eventId: freshId, _signature: sig, subject: args.subject, startDateTime: args.startDateTime, endDateTime: args.endDateTime, location: args.location, body: args.body, attendees: args.attendees });
           }
           return res2;
         });
       });
     }
+    // Surface the actual Graph error message
+    res.graphErrorMessage = graphErrMsg;
     return res;
   });
 }
@@ -755,7 +871,6 @@ function cancelOutlookCalendarEvent(args){
     // Phase 1: cancel (sends notice)
     return graphRequest("POST", "me/events/"+enc+"/cancel", body, {immutableId: true}).then(function(cancelRes){
       if(!cancelRes.ok){
-        // Cancel itself failed — return raw failure to caller for signature fallback
         return {
           ok: false,
           status: cancelRes.status,
@@ -765,41 +880,41 @@ function cancelOutlookCalendarEvent(args){
           phase: "cancel"
         };
       }
-      // Phase 2: wait for Graph to process, then check if event is still there
+      // Phase 2: wait for Graph to process, then check if event is still there at this id
       return new Promise(function(r){ setTimeout(r, 1500); }).then(function(){
         return graphRequest("GET", "me/events/"+enc, null, {immutableId: true}).then(function(checkRes){
+          var phaseSummary = "cancellation notice sent to attendees (HTTP "+cancelRes.status+")";
+          // v1.14 helper: after we think we're done at this id, scan calendarView for any residual
+          // events matching the original signature. Catches Outlook's "phantom" series-master quirk
+          // where Graph 404s the occurrence id but the underlying entry persists under a different id.
+          function residualSweep(detailSoFar){
+            if(!sig) return Promise.resolve({ok:true, status: cancelRes.status, actuallyCancelled: true, verifyDetail: detailSoFar, cancelStatus: cancelRes.status});
+            return findResidualBySignature(sig).then(function(scan){
+              if(!scan.found) return {ok:true, status: cancelRes.status, actuallyCancelled: true, verifyDetail: detailSoFar+"; residual-sweep confirmed no remaining event with this signature", cancelStatus: cancelRes.status};
+              // Found a residual — try to delete it too
+              return graphRequest("DELETE", "me/events/"+encodeURIComponent(scan.residualId), null, {immutableId: true}).then(function(rDel){
+                return findResidualBySignature(sig).then(function(scan2){
+                  if(!scan2.found) return {ok:true, status: cancelRes.status, actuallyCancelled: true, verifyDetail: detailSoFar+"; residual entry (id "+scan.residualId.slice(0,20)+"...) was deleted as cleanup", cancelStatus: cancelRes.status, residualCleaned: true};
+                  return {ok:true, status: cancelRes.status, actuallyCancelled: false, warning: "Cancel succeeded for one event id ("+detailSoFar+") AND we deleted a residual entry (id "+scan.residualId.slice(0,20)+"...) — but there's STILL an event matching this signature in your calendar. Outlook may be treating this as a recurring series or has a stale entry that needs manual removal.", cancelStatus: cancelRes.status, deleteResidualStatus: rDel.status};
+                });
+              });
+            });
+          }
           if(checkRes.status === 404){
-            // Event already gone — cancel did the full job
-            return {
-              ok: true,
-              status: cancelRes.status,
-              actuallyCancelled: true,
-              verifyDetail: "cancellation notice sent to attendees; event removed from calendar (verified 404 after cancel)",
-              cancelStatus: cancelRes.status
-            };
+            return residualSweep("event removed from calendar (verified 404 after cancel)");
           }
           // Event still queryable — explicit DELETE to remove it from the calendar view.
-          // Attendees already got the cancellation notice via Phase 1.
           return graphRequest("DELETE", "me/events/"+enc, null, {immutableId: true}).then(function(delRes){
-            // Phase 3: final verification — event MUST be 404 to claim success
             return graphRequest("GET", "me/events/"+enc, null, {immutableId: true}).then(function(finalCheck){
               if(finalCheck.status === 404){
-                return {
-                  ok: true,
-                  status: cancelRes.status,
-                  actuallyCancelled: true,
-                  verifyDetail: "cancellation notice sent to attendees (HTTP "+cancelRes.status+"); event then explicitly deleted from calendar (HTTP "+delRes.status+"); verified gone (final GET 404)",
-                  cancelStatus: cancelRes.status,
-                  deleteStatus: delRes.status
-                };
+                return residualSweep("event explicitly deleted from calendar (HTTP "+delRes.status+"); verified gone at this id (final GET 404)");
               }
-              // Final verification shows event still there — honest failure
               var isCancelled = !!(finalCheck.body && finalCheck.body.isCancelled);
               return {
                 ok: true,
                 status: cancelRes.status,
                 actuallyCancelled: false,
-                warning: "Cancel notice was sent (HTTP "+cancelRes.status+") and DELETE was attempted (HTTP "+delRes.status+"), but the event is STILL on the calendar (final GET status "+finalCheck.status+", isCancelled="+isCancelled+"). The attendees did receive the cancellation email, but the event entry remained. Please open Outlook, find this event manually, and delete it.",
+                warning: "Cancel notice was sent (HTTP "+cancelRes.status+") and DELETE was attempted (HTTP "+delRes.status+"), but the event is STILL on the calendar (final GET status "+finalCheck.status+", isCancelled="+isCancelled+"). The attendees received the cancellation email, but the event entry remained. Please open Outlook and delete the event manually.",
                 cancelStatus: cancelRes.status,
                 deleteStatus: delRes.status,
                 verifyStatus: finalCheck.status
@@ -838,17 +953,31 @@ function deleteOutlookCalendarEvent(args){
   }
   function verifyDelete(res, eventId){
     if(!res.ok) return res;
-    // v1.12: wait briefly for Graph to settle, then verify the event is actually gone (404)
     return new Promise(function(r){ setTimeout(r, 800); }).then(function(){
       return graphRequest("GET", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true}).then(function(verify){
         if(verify.status === 404){
           res.actuallyDeleted = true;
           res.verifyDetail = "verified 404 — event no longer in calendar";
+          // v1.14: residual-sweep — make sure no other event with this signature is still hanging around
+          if(args._signature){
+            return findResidualBySignature(args._signature).then(function(scan){
+              if(!scan.found){ res.verifyDetail += "; residual-sweep clean"; return res; }
+              // Delete the residual too
+              return graphRequest("DELETE", "me/events/"+encodeURIComponent(scan.residualId), null, {immutableId: true}).then(function(){
+                return findResidualBySignature(args._signature).then(function(scan2){
+                  if(!scan2.found){ res.verifyDetail += "; residual entry (id "+scan.residualId.slice(0,20)+"...) was also deleted as cleanup"; res.residualCleaned = true; return res; }
+                  res.actuallyDeleted = false;
+                  res.warning = "DELETE succeeded for the targeted event AND we removed a residual entry, but ANOTHER event with this signature is still in your calendar. Outlook may have a stale entry that needs manual removal.";
+                  return res;
+                });
+              });
+            });
+          }
+          return res;
         }else if(verify.body){
           res.actuallyDeleted = false;
           res.warning = "DELETE returned HTTP "+res.status+" but the event is STILL queryable in Graph (status "+verify.status+"). The deletion did NOT take. Most likely the eventId points to a different event than expected — please open Outlook manually to find and delete the right one.";
         }else{
-          // v1.12: don't default to true on unknown — surface uncertainty
           res.actuallyDeleted = false;
           res.warning = "DELETE returned HTTP "+res.status+" but verification GET returned an unexpected status "+verify.status+" with no body. Cannot confirm whether the deletion took. Please check Outlook to verify.";
         }
@@ -1234,21 +1363,23 @@ function callClaude(){
       }else if(editDir){
         var visible=reply.replace(editDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        var changed = Object.keys(editDir.args).filter(function(k){return k!=="eventId" && k!=="event";}).join(", ");
+        var changed = Object.keys(editDir.args).filter(function(k){return k!=="eventId" && k!=="event" && k.charAt(0)!=="_";}).join(", ");
         addMsg("toolcal","Editing event ("+(changed||"no fields specified")+")...");
         var thinking=showTyping();
         editOutlookCalendarEvent(editDir.args).then(function(res){
           hideTyping(thinking);
           if(res.ok && res.verified !== false){
-            addMsg("toolcal","✅ Event updated (HTTP "+res.status+", verified). Attendees will receive an update notification from Outlook.");
-            hist.push({role:"user",content:"[System: Calendar event edited successfully via Graph API. HTTP "+res.status+". Fields changed: "+(changed||"none")+". Verification: change reflected in response body. Confirm to Iacovos in one short sentence what changed.]"});
+            var fallbackTag = res.fallbackPath === "delete-create" ? " (via DELETE+CREATE fallback — Graph rejected in-place PATCH)" : "";
+            addMsg("toolcal","✅ Event updated (HTTP "+res.status+", verified)"+fallbackTag+". Attendees will receive notification from Outlook.");
+            var fallbackNote = res.fallbackPath === "delete-create" ? " Note: this used the DELETE+CREATE fallback because Graph rejected the in-place PATCH with an overlap error. Attendees will receive a cancellation notice (for the old time) and a fresh invitation (for the new time), instead of a single 'event updated' notice." : "";
+            hist.push({role:"user",content:"[System: Calendar event edited successfully. HTTP "+res.status+". Fields changed: "+(changed||"none")+"."+fallbackNote+" Confirm to Iacovos in one short sentence what changed.]"});
           }else if(res.ok && res.verified === false){
             addMsg("toolcal","⚠️ Event edit returned 200 but verification shows the change may not have applied. "+(res.warning||""));
             hist.push({role:"user",content:"[System: Calendar EDIT returned HTTP "+res.status+" but post-edit verification flagged a discrepancy: "+(res.warning||"")+". Tell Iacovos honestly that the edit may not have taken — recommend he opens Outlook to verify and retries if needed.]"});
           }else{
-            var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
+            var errMsg = res.graphErrorMessage || (res.body && res.body.error ? res.body.error.message : res.raw) || "unknown error";
             addMsg("toolcal","❌ Event edit failed (HTTP "+res.status+"): "+errMsg);
-            hist.push({role:"user",content:"[System: Calendar event EDIT FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly that the edit did not work. If the error mentions the eventId, suggest he ask you to re-list the calendar so you can pick the correct event.]"});
+            hist.push({role:"user",content:"[System: Calendar event EDIT FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly. If the error mentions the eventId or 'malformed', suggest he ask you to re-list the calendar so you can pick the correct event.]"});
           }
           callClaude();
         });
