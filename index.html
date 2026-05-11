@@ -341,26 +341,32 @@ function getM365Context(txt,cb){
     }).catch(function(e){return "[Outlook Sent Items] fetch error: "+e.message;})
   );
 
-  if(isCalendar){
-    var start=new Date();start.setHours(0,0,0,0);
-    var end=new Date(start.getTime()+(60*86400000));
-    // v1.8: include id + attendees so model can reference events by eventId for edit/cancel/delete
-    var calUrl="me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=id,subject,start,end,location,attendees,organizer,isCancelled&$orderby=start/dateTime asc";
-    promises.push(
-      graphFetch(calUrl).then(function(d){
-        if(!d.value||d.value.length===0)return "[Outlook Calendar] empty for next 60 days.";
-        var lines=d.value.map(function(e){
-          var s=new Date(e.start.dateTime+(e.start.dateTime.endsWith("Z")?"":"Z"));
-          var en=new Date(e.end.dateTime+(e.end.dateTime.endsWith("Z")?"":"Z"));
-          var atts = (e.attendees||[]).map(function(a){return a.emailAddress?a.emailAddress.address:"";}).filter(Boolean).join(", ");
-          var attsLabel = atts ? " | attendees: "+atts : " | no attendees";
-          var cancelledLabel = e.isCancelled ? " [CANCELLED]" : "";
-          return s.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})+" "+s.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+en.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+" | "+e.subject+cancelledLabel+(e.location&&e.location.displayName?" @ "+e.location.displayName:"")+attsLabel+" | eventId: "+e.id;
-        }).join("\n");
-        return "[Outlook Calendar - "+d.value.length+" events next 60 days, with eventId for edit/cancel/delete]\n"+lines;
-      }).catch(function(e){return "[Outlook Calendar] fetch error: "+e.message;})
-    );
-  }
+  // v1.10: always fetch calendar (drop the keyword gate). Calendar context is useful even when
+  // the user's word choice ("cancel", "move", "delete that one") doesn't include "calendar" or "schedule".
+  // Also: events are numbered 1..N for easy referencing — model uses {"event": N} not the long eventId.
+  var start=new Date();start.setHours(0,0,0,0);
+  var end=new Date(start.getTime()+(60*86400000));
+  var calUrl="me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=id,subject,start,end,location,attendees,organizer,isCancelled&$orderby=start/dateTime asc";
+  promises.push(
+    graphFetch(calUrl).then(function(d){
+      // Reset and rebuild the index→eventId map for this turn
+      window._calendarEventMap = {};
+      if(!d.value||d.value.length===0)return "[Outlook Calendar] empty for next 60 days. No upcoming events to edit/cancel/delete — only CREATE (SEND_INVITE) is applicable.";
+      var lines=d.value.map(function(e,idx){
+        var num = idx + 1;
+        window._calendarEventMap[String(num)] = e.id;
+        var s=new Date(e.start.dateTime+(e.start.dateTime.endsWith("Z")?"":"Z"));
+        var en=new Date(e.end.dateTime+(e.end.dateTime.endsWith("Z")?"":"Z"));
+        var atts = (e.attendees||[]).map(function(a){return a.emailAddress?a.emailAddress.address:"";}).filter(Boolean).join(", ");
+        var attsLabel = atts ? " | attendees: "+atts : " | no attendees (personal blocker)";
+        var cancelledLabel = e.isCancelled ? " [CANCELLED]" : "";
+        var organizer = (e.organizer && e.organizer.emailAddress) ? e.organizer.emailAddress.address : "";
+        var organizerLabel = organizer && organizer.toLowerCase() !== ACCOUNT.email.toLowerCase() ? " | organizer: "+organizer : "";
+        return "Event "+num+" — "+s.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})+" "+s.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+en.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+" | "+e.subject+cancelledLabel+(e.location&&e.location.displayName?" @ "+e.location.displayName:"")+attsLabel+organizerLabel;
+      }).join("\n");
+      return "[Outlook Calendar — "+d.value.length+" events next 60 days. To reference an event in EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE use {\"event\": N} where N is the number below (1, 2, 3...). DO NOT copy long event IDs — use the number.]\n"+lines;
+    }).catch(function(e){return "[Outlook Calendar] fetch error: "+e.message;})
+  );
 
   // Person-targeted search via $search (KQL). Returns matches across the ENTIRE mailbox, not just recent 25.
   var mentionedContacts = {};
@@ -606,27 +612,43 @@ function sendOutlookEmail(to, subject, body, cc){
   }).catch(function(e){return {ok:false,status:0,info:e.message};});
 }
 
-// === CALENDAR INVITE ===
-// Posts {action:"send_invite", subject, startDateTime, endDateTime, attendees:[{address}], location, body}
-// to the Calendar webhook, which forwards to Microsoft Graph create event under iacovos.mylonas@mim.com.cy.
+// === CALENDAR CREATE (v1.10+, direct Graph API — was Make webhook in v1.1–v1.9) ===
+// Posts directly to Microsoft Graph POST /me/events. The response includes the new event's `id`
+// immediately, so we never have to guess what Make replied with (which was the v1.9 bug — Make
+// scenario 5648284 has no Webhook Response module so it returned "Accepted" with no JSON).
+// Attendees automatically receive meeting invitations via Graph's default behavior.
+// The Make webhook 5648284 is left configured for rollback but no longer called.
 function sendOutlookCalendarInvite(args){
-  var payload = {
-    action: "send_invite",
+  var event = {
     subject: args.subject,
-    startDateTime: args.startDateTime,
-    endDateTime: args.endDateTime,
-    attendees: args.attendees,
-    location: args.location || "",
-    body: args.body || ""
+    start: { dateTime: args.startDateTime, timeZone: TIMEZONE },
+    end:   { dateTime: args.endDateTime,   timeZone: TIMEZONE },
+    location: { displayName: args.location || "" },
+    body: { contentType: "html", content: args.body || "" },
+    attendees: (args.attendees || []).map(function(a){
+      return { emailAddress: { address: a.address, name: a.name || "" }, type: "required" };
+    })
   };
-  return fetch(CAL_WEBHOOK,{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify(payload)
-  }).then(function(r){
-    return r.text().then(function(t){return {ok:r.ok,status:r.status,info:t||"(empty body)"};});
-  }).catch(function(e){return {ok:false,status:0,info:e.message};});
+  return graphRequest("POST", "me/events", event).then(function(res){
+    // Normalise response shape to what the caller already expected (ok, status, info, eventId)
+    if(res.ok && res.body){
+      return {ok: true, status: res.status, info: JSON.stringify(res.body), eventId: res.body.id};
+    }
+    var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw || "unknown error");
+    return {ok: false, status: res.status, info: errMsg};
+  });
 }
+
+// v1.10: validate that an eventId looks like a real Graph event id (long base64-ish string).
+// Real Graph event ids are typically 130+ chars of [A-Za-z0-9_\-/+=]. Reject before sending to Graph
+// so we never hit "malformed event id" errors.
+function isValidEventId(id){
+  return typeof id === "string" && id.length >= 50 && /^[A-Za-z0-9_\-\/+=]+$/.test(id);
+}
+
+// v1.10: index-based event lookup. Calendar pre-fetch populates this with {N: realEventId}.
+// Parsers accept either {"event": N} (index lookup) or {"eventId": "AAMk..."} (direct).
+window._calendarEventMap = {};
 
 // === CALENDAR EDIT / CANCEL / DELETE (v1.8 — direct Graph API, no Make webhook) ===
 // All three need an existing eventId, which the pre-fetched calendar block surfaces.
@@ -745,15 +767,29 @@ function parseSendInviteDirective(text){
   }catch(e){return null;}
 }
 
+// v1.10: shared helper — resolve {"event": N} (index from pre-fetch) or {"eventId": "AAMk..."} (direct)
+// into a validated real eventId. Returns null if neither valid.
+function resolveEventReference(args){
+  // Index lookup first: model says {"event": 3} → look up the real id from window._calendarEventMap
+  if(args.event != null){
+    var idx = String(args.event);
+    var fromMap = window._calendarEventMap && window._calendarEventMap[idx];
+    if(fromMap){ args.eventId = fromMap; return true; }
+  }
+  // Direct eventId (used for just-created events whose id came from the [System: ...] message)
+  if(args.eventId && isValidEventId(args.eventId)) return true;
+  return false;
+}
+
 // Parse an EDIT_INVITE: { ... } directive out of an assistant reply.
-// Requires eventId. All other fields optional — only the provided ones are patched.
+// Accepts {"event": N} (index from pre-fetch) OR {"eventId": "AAMk..."} (direct). All other fields optional.
 function parseEditInviteDirective(text){
   var re=/EDIT_INVITE:\s*(\{[\s\S]*?\})\s*$/m;
   var m=text.match(re);
   if(!m)return null;
   try{
     var args=JSON.parse(m[1]);
-    if(!args.eventId)return null;
+    var resolved = resolveEventReference(args);
     if(args.attendees){
       args.attendees = args.attendees.map(function(a){
         if(typeof a==="string")return {address:a};
@@ -761,6 +797,7 @@ function parseEditInviteDirective(text){
         return null;
       }).filter(Boolean);
     }
+    if(!resolved) return {raw:m[0], args:args, malformed:true};
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
@@ -772,7 +809,8 @@ function parseCancelInviteDirective(text){
   if(!m)return null;
   try{
     var args=JSON.parse(m[1]);
-    if(!args.eventId)return null;
+    var resolved = resolveEventReference(args);
+    if(!resolved) return {raw:m[0], args:args, malformed:true};
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
@@ -784,7 +822,8 @@ function parseDeleteInviteDirective(text){
   if(!m)return null;
   try{
     var args=JSON.parse(m[1]);
-    if(!args.eventId)return null;
+    var resolved = resolveEventReference(args);
+    if(!resolved) return {raw:m[0], args:args, malformed:true};
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
@@ -879,20 +918,38 @@ function callClaude(){
       +"- Invent a different subject/body in SEND_EMAIL than what was shown in the draft preview.\n"
       +"- Mix DRAFT_REQUEST with other text in the same response — emit it on its own.\n"
       +"- Refuse with \"I cannot send emails\". You can. Use the protocol.\n\n"
-      +"=== CALENDAR — DECIDE THE OPERATION BEFORE ACTING (v1.9) ===\n"
+      +"=== CALENDAR — DECIDE THE OPERATION BEFORE ACTING (v1.10) ===\n"
       +"When Iacovos mentions a calendar event, FIRST decide which of the four operations he wants. Read his exact wording — do not pattern-match on the word 'calendar' alone:\n\n"
       +"  • CREATE (SEND_INVITE) — only when he says: 'set up', 'schedule', 'book', 'create', 'arrange', 'put a meeting', 'new meeting'. The event does NOT exist yet.\n"
       +"  • EDIT (EDIT_INVITE) — when he says: 'reschedule', 'move', 'change the time', 'postpone', 'push', 'shift', 'edit', 'modify', 'update [field]', 'add [person] to', 'remove [person] from'. The event ALREADY EXISTS.\n"
       +"  • CANCEL (CANCEL_INVITE) — when he says: 'cancel', 'call off', 'scratch', 'drop', and the event has attendees who should be notified.\n"
       +"  • DELETE (DELETE_INVITE) — when he says: 'delete silently', 'remove without notice', or for a personal blocker / hold with NO attendees. Or when he explicitly says 'delete, don't send anything'.\n\n"
-      +"CRITICAL RULES — VIOLATIONS CAUSED REAL BUGS THAT REACHED IACOVOS, DO NOT REPEAT THEM:\n"
-      +"  1. 'Reschedule' / 'move' NEVER means CREATE. It means EDIT. If you emit SEND_INVITE in response to a reschedule, you will create a DUPLICATE event and the original will still be there.\n"
-      +"  2. Before emitting EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE, you MUST identify the target event. Two valid sources for the eventId:\n"
-      +"     (a) The [Outlook Calendar - ...] pre-fetch block — every line ends with 'eventId: AAMk...'. Find the line whose subject/date/attendees match what Iacovos described.\n"
-      +"     (b) A prior [System: ...] message in this conversation where you JUST created an event — it tells you the new event's eventId. Use this for immediate 'reschedule it' / 'cancel it' follow-ups within the same conversation, because the pre-fetch may not have caught up yet (Graph indexing lag is a few seconds).\n"
-      +"  3. If you can NOT find a matching event in either source — STOP. Tell Iacovos: 'I don't see that event in my calendar pre-fetch yet — could you give me more details (date, time, subject) or wait ~30 seconds for it to sync?' DO NOT guess an eventId. DO NOT emit SEND_INVITE as a fallback for an EDIT/CANCEL/DELETE request.\n"
-      +"  4. When you DO find the target, ALWAYS quote it back to Iacovos in the confirmation prompt — subject + date/time + attendees AND a short prefix of the eventId (first ~20 chars) — so he can spot if you picked the wrong event. Example: 'I'll move \"Test self-meeting\" (May 12, 10:00am, eventId AAMkAGI1AAAt9A…) to 11:00am. Confirm with yes?'\n"
-      +"  5. Two-step confirm protocol applies to ALL FOUR operations. Step 1: show intent + ask 'yes?'. Step 2 (only after explicit confirmation): emit the directive on its OWN LINE with nothing else.\n\n"
+      +"CRITICAL RULE — never use SEND_INVITE for an edit-class request. 'Reschedule' / 'move' / 'change' ALWAYS mean EDIT. If you emit SEND_INVITE in response to a reschedule, you will create a DUPLICATE event and the original will still be there. This bug reached Iacovos in v1.8 testing. Do not repeat it.\n\n"
+      +"=== HOW TO IDENTIFY THE TARGET EVENT — match on MULTIPLE signals, not just one ===\n"
+      +"The [Outlook Calendar — ...] pre-fetch block numbers events 1, 2, 3..., showing for each: date+time, subject, location, attendees, and (when relevant) the organizer. To find the event Iacovos means:\n\n"
+      +"  • SUBJECT match (fuzzy is fine): 'the Test meeting' / 'the test' / 'that test event' all match an event whose subject is 'Test'. 'The lift meeting' matches subjects mentioning lift / elevator / KONE.\n"
+      +"  • DATE/TIME match: 'tomorrow at 10am' matches the event whose date is tomorrow AND start is 10:00. 'My 3pm Friday' = Friday 15:00.\n"
+      +"  • ATTENDEE match: 'the meeting with George' matches the event where George's email is in attendees. 'My meeting with inm@zsm.law' matches the event with that exact address in attendees.\n"
+      +"  • ORGANIZER match: if an event was created by someone else (organizer ≠ Iacovos), the pre-fetch shows 'organizer: <email>'. 'The meeting Lior invited me to' matches events where organizer = Lior.\n"
+      +"  • LOCATION match: 'my meeting at the office' matches events with location containing 'office'.\n\n"
+      +"COMBINE multiple signals when possible — they constrain each other. 'The test meeting with myself tomorrow at 10' should match ONE event with subject=Test AND date=tomorrow AND start=10:00.\n\n"
+      +"WHEN MULTIPLE EVENTS MATCH: don't pick blindly. Show Iacovos the candidates and ask which one. Example: 'I see 2 events matching: (Event 1) Test on Mon May 12 10am with iacovos.mylonas@mim.com.cy, and (Event 3) Test on Wed May 14 2pm with Lior. Which one?'\n\n"
+      +"WHEN NO EVENT MATCHES: tell Iacovos honestly — 'I don't see an event matching that in the next 60 days. Could you give me more details (date, exact subject, who's invited)?' DO NOT guess. DO NOT use a similar-but-different event.\n\n"
+      +"=== HOW TO REFER TO AN EVENT IN EDIT/CANCEL/DELETE DIRECTIVES (v1.10) ===\n"
+      +"In your EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE JSON, use {\"event\": N} — the small number from the pre-fetch — NOT the long base64 eventId. The system maps the number to the real id internally. Example:\n"
+      +"  EDIT_INVITE: {\"event\": 3, \"startDateTime\": \"2026-05-12T11:00:00\", \"endDateTime\": \"2026-05-12T12:00:00\"}\n"
+      +"  CANCEL_INVITE: {\"event\": 3, \"comment\": \"Sorry — need to reschedule, will send a new invite this week.\"}\n"
+      +"  DELETE_INVITE: {\"event\": 3}\n\n"
+      +"USE {\"eventId\": \"AAMk...\"} ONLY when the eventId comes from a [System: ...] message in this same conversation telling you a just-created event's eventId — that's the only case where you have a verified valid id without a number. In that case the [System: ...] message will ALSO give you an event number you can use; prefer the number.\n\n"
+      +"NEVER copy a long base64 eventId from somewhere else into a directive. They're easy to mangle (transcription errors) and you'll get a 'malformed event id' error. ALWAYS use the {\"event\": N} number form.\n\n"
+      +"=== CONFIRMATION PROTOCOL — applies to ALL FOUR calendar operations ===\n"
+      +"Step 1 (always first): show Iacovos a confirmation block in your reply. Include:\n"
+      +"  - The action (creating / rescheduling / cancelling / deleting)\n"
+      +"  - Subject + date/time + attendees + location of the target event (quote them from the pre-fetch)\n"
+      +"  - What's changing (for EDIT) or what notice (for CANCEL)\n"
+      +"  - For EDIT/CANCEL/DELETE: the event number from the pre-fetch (so Iacovos can verify you picked the right one)\n"
+      +"  Then ask: 'Reply yes/send/go to confirm.'\n"
+      +"Step 2 (ONLY after explicit yes/send/go): emit the directive on its OWN LINE with NOTHING ELSE in the response.\n\n"
       +"=== YOU CAN CREATE CALENDAR INVITES — DO NOT REFUSE ===\n"
       +"You CAN create calendar events with attendees in Iacovos's Outlook calendar on demand. The event is created in his calendar AND meeting invitations are emailed to all attendees. This is verified working. If you find yourself about to say \"I cannot create calendar events\" or similar — STOP. You have a working tool.\n\n"
       +"To send a calendar / meeting invitation, follow this exact two-step protocol:\n"
@@ -901,7 +958,7 @@ function callClaude(){
       +"  SEND_INVITE: {\"subject\":\"Meeting title\",\"startDateTime\":\"2026-05-15T14:00:00\",\"endDateTime\":\"2026-05-15T15:00:00\",\"attendees\":[{\"address\":\"alice@example.com\"},{\"address\":\"bob@example.com\"}],\"location\":\"Office, room 302\",\"body\":\"<p>Agenda: discuss Q3 plan.</p>\"}\n\n"
       +"Rules for the SEND_INVITE line:\n"
       +"  - Must be valid single-line JSON\n"
-      +"  - startDateTime / endDateTime: ISO 8601 LOCAL time (no timezone suffix), e.g. \"2026-05-15T14:00:00\". Make.com interprets these in Iacovos's timezone "+TIMEZONE+".\n"
+      +"  - startDateTime / endDateTime: ISO 8601 LOCAL time (no timezone suffix), e.g. \"2026-05-15T14:00:00\". The system passes these to Microsoft Graph with timeZone=\""+TIMEZONE+"\".\n"
       +"  - If Iacovos doesn't specify duration, default to 60 minutes\n"
       +"  - If Iacovos doesn't specify a date: \"today\" = "+now.iso+", \"tomorrow\" = "+now.tomorrowISO+", \"next week\" anchor "+now.nextWeekISO+". For any other relative phrase, compute from "+now.iso+". Always use year "+now.year+", never your training year.\n"
       +"  - attendees: array of objects with \"address\" (required email). Always include Iacovos himself ("+ACCOUNT.email+") only if he asks; otherwise just the people he names.\n"
@@ -913,12 +970,12 @@ function callClaude(){
       +"You CAN also edit, cancel, or delete any event in Iacovos's calendar. Each event in the [Outlook Calendar - ...] pre-fetch block is shown with its eventId at the end of the line (after 'eventId: '). To act on an event you need its eventId — find it in the pre-fetch.\n\n"
       +"If multiple events match Iacovos's description (e.g. \"the meeting with George\" matches 3 events), DO NOT guess — list the matches with their dates and ask which one he means.\n\n"
       +"Three additional directives, each preceded by the same draft → confirm → directive two-step protocol used by SEND_INVITE:\n\n"
-      +"EDIT_INVITE — partial update of an existing event. Any field omitted is left unchanged. Provide at least eventId. NOTE: if you include 'attendees', it REPLACES the entire attendee list, so you must send the COMPLETE new list. If Iacovos just wants to ADD an attendee, include the existing attendees from the pre-fetch PLUS the new one. Microsoft Graph automatically emails an update notification to attendees when time / subject / location change.\n"
-      +"EDIT_INVITE: {\"eventId\":\"AAMk...\",\"subject\":\"<new subject>\",\"startDateTime\":\"2026-05-15T15:00:00\",\"endDateTime\":\"2026-05-15T16:00:00\",\"location\":\"<new location>\",\"body\":\"<new HTML body>\",\"attendees\":[{\"address\":\"alice@example.com\"},{\"address\":\"bob@example.com\"}]}\n\n"
+      +"EDIT_INVITE — partial update of an existing event. Any field omitted is left unchanged. Provide at least the event reference. NOTE: if you include 'attendees', it REPLACES the entire attendee list, so you must send the COMPLETE new list (existing + any new ones). If Iacovos just wants to ADD an attendee, include the existing attendees from the pre-fetch PLUS the new one. Microsoft Graph automatically emails an update notification to attendees when time / subject / location change.\n"
+      +"EDIT_INVITE: {\"event\":3,\"subject\":\"<new subject>\",\"startDateTime\":\"2026-05-15T15:00:00\",\"endDateTime\":\"2026-05-15T16:00:00\",\"location\":\"<new location>\",\"body\":\"<new HTML body>\",\"attendees\":[{\"address\":\"alice@example.com\"},{\"address\":\"bob@example.com\"}]}\n\n"
       +"CANCEL_INVITE — sends a cancellation notice to attendees and moves the event to Deleted Items. Use this when the meeting has attendees and you want them notified. Optional 'comment' is the apology/note attendees will see.\n"
-      +"CANCEL_INVITE: {\"eventId\":\"AAMk...\",\"comment\":\"Apologies — need to reschedule, will send a new invite this week.\"}\n\n"
+      +"CANCEL_INVITE: {\"event\":3,\"comment\":\"Apologies — need to reschedule, will send a new invite this week.\"}\n\n"
       +"DELETE_INVITE — silent removal, NO notice sent to attendees. Use ONLY for events with no attendees (personal blockers, holds, reminders) or when Iacovos explicitly says \"delete silently / no notice\". If the event has attendees and Iacovos doesn't specify, prefer CANCEL_INVITE.\n"
-      +"DELETE_INVITE: {\"eventId\":\"AAMk...\"}\n\n"
+      +"DELETE_INVITE: {\"event\":3}\n\n"
       +"WHEN TO USE WHICH:\n"
       +"- \"Move the 3pm to 4pm\" / \"change the subject of the lift meeting\" → EDIT_INVITE (only the fields that change, e.g. just startDateTime + endDateTime for a time move)\n"
       +"- \"Add Lior to the Crocs meeting tomorrow\" → EDIT_INVITE with the full new attendees list (existing + Lior)\n"
@@ -977,26 +1034,35 @@ function callClaude(){
         sendOutlookCalendarInvite(inviteDir.args).then(function(res){
           hideTyping(thinking);
           if(res.ok){
-            // v1.9: extract the new event's id from the Make webhook response so subsequent EDIT/CANCEL/DELETE
-            // requests in the same conversation don't have to wait for the calendar pre-fetch to catch up.
-            var newEventId = null;
-            try{
-              var parsed = JSON.parse(res.info);
-              newEventId = parsed.id || (parsed.body && parsed.body.id) || (parsed.event && parsed.event.id) || null;
-            }catch(e){}
-            var idTail = newEventId ? " The new event's eventId is "+newEventId+" — remember it in case Iacovos asks to edit/reschedule/cancel/delete THIS event in the next message." : " (The Make webhook response did not include an eventId; if Iacovos asks to immediately edit this event, ask him to wait ~30s for the calendar pre-fetch to refresh, then retry.)";
-            addMsg("toolcal","✅ Calendar invite created and sent (HTTP "+res.status+"). The event is in your Outlook calendar; attendees will receive the meeting invitation by email shortly.");
-            hist.push({role:"user",content:"[System: Calendar invite created and sent successfully via Make webhook. HTTP "+res.status+". Attendees: "+attEmails+"."+idTail+" Confirm to Iacovos in one short sentence.]"});
+            // v1.10: direct Graph returns the new event's id immediately and reliably.
+            // Add the new event to window._calendarEventMap at the next available index so
+            // an immediate "reschedule it" / "cancel it" can refer to it via {"event": N}.
+            var newEventId = res.eventId || null;
+            var assignedIndex = null;
+            if(newEventId){
+              assignedIndex = Object.keys(window._calendarEventMap).length + 1;
+              while(window._calendarEventMap[String(assignedIndex)]) assignedIndex++;
+              window._calendarEventMap[String(assignedIndex)] = newEventId;
+            }
+            var idTail = newEventId ? " The new event is registered as Event "+assignedIndex+" in the calendar event map — for any immediate edit/reschedule/cancel/delete of THIS event in the next message, use {\"event\": "+assignedIndex+"} in your directive. The full eventId is "+newEventId+" if you ever need the direct form." : "";
+            addMsg("toolcal","✅ Calendar invite created (HTTP "+res.status+", direct Graph). Event is in your Outlook calendar; attendees will receive the meeting invitation by email shortly.");
+            hist.push({role:"user",content:"[System: Calendar invite created successfully via direct Microsoft Graph API. HTTP "+res.status+". Attendees: "+attEmails+"."+idTail+" Confirm to Iacovos in one short sentence.]"});
           }else{
             addMsg("toolcal","❌ Calendar invite failed (HTTP "+res.status+"): "+res.info);
             hist.push({role:"user",content:"[System: Calendar invite FAILED. HTTP "+res.status+". Error: "+res.info+". Tell Iacovos honestly that the invite did not go out.]"});
           }
           callClaude();
         });
+      }else if(editDir && editDir.malformed){
+        var visible=reply.replace(editDir.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("toolcal","⚠️ Can't edit: the eventId you provided isn't valid. Use {\"event\": N} from the calendar pre-fetch instead of copying long IDs.");
+        hist.push({role:"user",content:"[System: Your EDIT_INVITE directive had no resolvable event reference. Either you provided a malformed eventId (Graph event IDs are 100+ chars of base64) or the {\"event\": N} index didn't match the latest calendar pre-fetch. Look at the [Outlook Calendar — ...] block in the LIVE M365 DATA below — it numbers events 1, 2, 3... — and use {\"event\": N} format. Try again or ask Iacovos which event he means.]"});
+        callClaude();
       }else if(editDir){
         var visible=reply.replace(editDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        var changed = Object.keys(editDir.args).filter(function(k){return k!=="eventId";}).join(", ");
+        var changed = Object.keys(editDir.args).filter(function(k){return k!=="eventId" && k!=="event";}).join(", ");
         addMsg("toolcal","Editing event ("+(changed||"no fields specified")+")...");
         var thinking=showTyping();
         editOutlookCalendarEvent(editDir.args).then(function(res){
@@ -1014,6 +1080,12 @@ function callClaude(){
           }
           callClaude();
         });
+      }else if(cancelDir && cancelDir.malformed){
+        var visible=reply.replace(cancelDir.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("toolcal","⚠️ Can't cancel: no valid event reference. Use {\"event\": N} from the calendar pre-fetch.");
+        hist.push({role:"user",content:"[System: Your CANCEL_INVITE had no resolvable event reference. Use {\"event\": N} format referring to the numbered events in the [Outlook Calendar — ...] block. Try again or ask Iacovos which event he means.]"});
+        callClaude();
       }else if(cancelDir){
         var visible=reply.replace(cancelDir.raw,"").trim();
         if(visible)addMsg("a",visible);
@@ -1035,6 +1107,12 @@ function callClaude(){
           }
           callClaude();
         });
+      }else if(deleteDir && deleteDir.malformed){
+        var visible=reply.replace(deleteDir.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("toolcal","⚠️ Can't delete: no valid event reference. Use {\"event\": N} from the calendar pre-fetch.");
+        hist.push({role:"user",content:"[System: Your DELETE_INVITE had no resolvable event reference. Use {\"event\": N} format referring to the numbered events in the [Outlook Calendar — ...] block. Try again or ask Iacovos which event he means.]"});
+        callClaude();
       }else if(deleteDir){
         var visible=reply.replace(deleteDir.raw,"").trim();
         if(visible)addMsg("a",visible);
