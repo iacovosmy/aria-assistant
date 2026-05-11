@@ -864,9 +864,41 @@ function editOutlookCalendarEvent(args){
 // Result: attendees get the cancellation notice AND the event physically leaves the calendar.
 function cancelOutlookCalendarEvent(args){
   var body = args.comment ? {Comment: args.comment} : {};
-  var sig = args._signature;
+  // v1.15: ALWAYS pre-fetch the event to capture subject+start BEFORE we cancel/delete it. This guarantees
+  // `sig` is populated even when the caller used {"eventId": "..."} (no map signature) — closing the
+  // residualSweep-skipped-when-sig-missing gap that caused false ✅ reports in v1.14.
+  return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId), null, {immutableId: true}).then(function(preFetch){
+    var sig = args._signature;
+    if(!sig && preFetch.ok && preFetch.body){
+      sig = {
+        subject: preFetch.body.subject,
+        start: preFetch.body.start && preFetch.body.start.dateTime
+      };
+    }
+    return runCancelWithSig(args.eventId, sig);
+  });
 
-  function fullCancelFlow(eventId){
+  function runCancelWithSig(eventId, sig){
+    return fullCancelFlow(eventId, sig).then(function(res){
+      if(res.actuallyCancelled === true) return res;
+      // Fallback: signature re-lookup if the eventId was stale
+      if(sig){
+        return refindEventBySignature(sig).then(function(freshId){
+          if(!freshId || freshId === eventId) return res;
+          return fullCancelFlow(freshId, sig).then(function(res2){
+            if(res2.actuallyCancelled === true){
+              res2.recovered = true;
+              res2.warning = "Initial cancel failed (eventId may have been stale) but recovered via signature re-lookup with a fresh ID.";
+            }
+            return res2;
+          });
+        });
+      }
+      return res;
+    });
+  }
+
+  function fullCancelFlow(eventId, sig){
     var enc = encodeURIComponent(eventId);
     // Phase 1: cancel (sends notice)
     return graphRequest("POST", "me/events/"+enc+"/cancel", body, {immutableId: true}).then(function(cancelRes){
@@ -926,27 +958,29 @@ function cancelOutlookCalendarEvent(args){
     });
   }
 
-  return fullCancelFlow(args.eventId).then(function(res){
-    if(res.actuallyCancelled === true) return res;
-    // Fallback: signature re-lookup if the eventId was stale
-    if(sig){
-      return refindEventBySignature(sig).then(function(freshId){
-        if(!freshId || freshId === args.eventId) return res;
-        return fullCancelFlow(freshId).then(function(res2){
-          if(res2.actuallyCancelled === true){
-            res2.recovered = true;
-            res2.warning = "Initial cancel failed (eventId may have been stale) but recovered via signature re-lookup with a fresh ID.";
-          }
-          return res2;
-        });
-      });
-    }
-    return res;
-  });
 }
 
-// v1.11: DELETE /me/events/{id} with immutable ID + signature retry on failure.
+// v1.11/v1.15: DELETE /me/events/{id} with immutable ID + signature retry + pre-fetch for residual sweep.
+// v1.15: ALWAYS pre-fetch the event first to populate args._signature, so the residual sweep runs even
+// when the caller used {"eventId": "..."} directly (which doesn't set a map signature). Same gap-fix
+// as cancelOutlookCalendarEvent.
 function deleteOutlookCalendarEvent(args){
+  // v1.15 pre-fetch wrapper — capture signature before delete, then run the existing flow
+  if(!args._signature){
+    return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId), null, {immutableId: true}).then(function(preFetch){
+      if(preFetch.ok && preFetch.body){
+        args._signature = {
+          subject: preFetch.body.subject,
+          start: preFetch.body.start && preFetch.body.start.dateTime
+        };
+      }
+      return runDelete(args);
+    });
+  }
+  return runDelete(args);
+}
+
+function runDelete(args){
   var sig = args._signature;
   function doDelete(eventId){
     return graphRequest("DELETE", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true});
