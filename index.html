@@ -349,6 +349,10 @@ function bulkDeleteEvents(events){
 // the original signature (subject + start time, ±30min). Returns {found: bool, residualId: string|null,
 // matchedSubject, matchedStart}. Catches the case where Graph returns 404 for one event id but the
 // event is still present under a different id (Outlook's "phantom" series-master quirk).
+// v1.16: widened from ±30min to SAME-DAY window. The user's intent for "delete the Test event tomorrow"
+// covers the whole day, not just events within 30 min of some specific timestamp. Multiple Test events
+// at different times on the same day would all be candidates for cleanup. Returns the FIRST residual
+// match; callers can call repeatedly to drain all residuals if needed.
 function findResidualBySignature(sig){
   if(!sig || !sig.subject) return Promise.resolve({found: false});
   var start = new Date(); start.setHours(0,0,0,0);
@@ -356,15 +360,28 @@ function findResidualBySignature(sig){
   var url = "me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=200&$select=id,subject,start";
   return graphFetch(url, {immutableId: true}).then(function(d){
     if(!d.value) return {found: false};
-    var sigStartTime = new Date(sig.start + (sig.start.endsWith("Z")?"":"Z")).getTime();
-    for(var i=0;i<d.value.length;i++){
-      var e = d.value[i];
-      if(!e.subject) continue;
-      if(e.subject.toLowerCase().trim() !== sig.subject.toLowerCase().trim()) continue;
-      var eStart = new Date(e.start.dateTime + (e.start.dateTime.endsWith("Z")?"":"Z")).getTime();
-      if(Math.abs(eStart - sigStartTime) < 30*60*1000){
-        return {found: true, residualId: e.id, matchedSubject: e.subject, matchedStart: e.start.dateTime};
+    var sigStartTime = sig.start ? new Date(sig.start + (sig.start.endsWith("Z")?"":"Z")).getTime() : null;
+    // First pass: same-day match (00:00–23:59 of the target date)
+    if(sigStartTime){
+      var sigDate = new Date(sigStartTime);
+      var dayStart = new Date(sigDate.getFullYear(), sigDate.getMonth(), sigDate.getDate()).getTime();
+      var dayEnd   = dayStart + 24*60*60*1000;
+      for(var i=0;i<d.value.length;i++){
+        var e = d.value[i];
+        if(!e.subject) continue;
+        if(e.subject.toLowerCase().trim() !== sig.subject.toLowerCase().trim()) continue;
+        var eStart = new Date(e.start.dateTime + (e.start.dateTime.endsWith("Z")?"":"Z")).getTime();
+        if(eStart >= dayStart && eStart < dayEnd){
+          return {found: true, residualId: e.id, matchedSubject: e.subject, matchedStart: e.start.dateTime, matchType: "same-day"};
+        }
       }
+    }
+    // Fallback: any subject match in the 60-day window (in case sig.start was wrong/missing)
+    for(var j=0;j<d.value.length;j++){
+      var ev = d.value[j];
+      if(!ev.subject) continue;
+      if(ev.subject.toLowerCase().trim() !== sig.subject.toLowerCase().trim()) continue;
+      return {found: true, residualId: ev.id, matchedSubject: ev.subject, matchedStart: ev.start.dateTime, matchType: "subject-only-60d"};
     }
     return {found: false};
   }).catch(function(){return {found: false};});
@@ -1248,6 +1265,15 @@ function callClaude(){
       +"- Invent a different subject/body in SEND_EMAIL than what was shown in the draft preview.\n"
       +"- Mix DRAFT_REQUEST with other text in the same response — emit it on its own.\n"
       +"- Refuse with \"I cannot send emails\". You can. Use the protocol.\n\n"
+      +"=== CALENDAR — TRUST THE CURRENT PRE-FETCH, NOT YOUR MEMORY (v1.16) ===\n"
+      +"BEFORE you respond to any cancel/delete/edit request, look at the [Outlook Calendar — ...] pre-fetch block that was generated FOR THIS MESSAGE. That block is the ground truth — it was just fetched from Microsoft Graph seconds ago.\n\n"
+      +"If Iacovos says \"delete X event\" or \"cancel X\" and ANY event matching X is visible in the current pre-fetch:\n"
+      +"  • You MUST attempt the deletion using {\"event\": N} where N is the index from the pre-fetch.\n"
+      +"  • DO NOT say \"I already deleted that earlier\" or \"that event is gone\" — if it's in the pre-fetch, it's NOT gone. Your previous claim was wrong. Acknowledge that and retry the operation.\n"
+      +"  • DO NOT refuse to act based on memory of a previous turn. The pre-fetch is reality; your memory of past turns is not.\n\n"
+      +"If Iacovos says \"delete X\" and NO event matching X is in the current pre-fetch:\n"
+      +"  • Then it really is gone, OR it's outside the 60-day pre-fetch window. Tell him honestly: \"I don't see any X event in the current calendar — has it already been removed, or do you mean a different one?\"\n\n"
+      +"This rule supersedes any other memory of 'previous successful' cancellations. If reality (pre-fetch) disagrees with your memory, reality wins.\n\n"
       +"=== CALENDAR — DECIDE THE OPERATION BEFORE ACTING (v1.10) ===\n"
       +"When Iacovos mentions a calendar event, FIRST decide which of the four operations he wants. Read his exact wording — do not pattern-match on the word 'calendar' alone:\n\n"
       +"  • CREATE (SEND_INVITE) — only when he says: 'set up', 'schedule', 'book', 'create', 'arrange', 'put a meeting', 'new meeting'. The event does NOT exist yet.\n"
