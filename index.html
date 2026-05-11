@@ -137,11 +137,31 @@ var SEND_WEBHOOK="https://hook.eu1.make.com/4fxvc3jo8bunqqmp5v14iy55ke91i3ki";
 var CAL_WEBHOOK="https://hook.eu1.make.com/9b46ohtqhq8c8mkizh9o3m4ionrbztqi";
 var TIMEZONE="Asia/Nicosia";
 var STYLES_URL="./styles.json";
+// Recipient classification constants (matches styles.json)
 var INTERNAL_DOMAIN="@mim.com.cy";
 var BOARD_FULL_TO=["abou26@gmail.com","gabi@dorsel.co.il","andreash@ahsgroupltd.com","nir.l@abultd.com","eyal.b@dorsel.co.il"];
 var BOARD_FULL_CC=["tomer.bitterman@mim.com.cy","liors@dorsel.co.il","athina.christodoulou@mim.com.cy"];
 var INNER_CIRCLE_SET=["liors@dorsel.co.il","nir.l@abultd.com"];
-var KNOWN_CONTACTS={"george":"mitsakos@2xm.eu","lior":"liors@dorsel.co.il","nir":"nir.l@abultd.com","michal":"michal.david@il.ey.com","yolit":"yolits@dorsel.co.il","david":"david.wood@mim.com.cy","athina":"athina.christodoulou@mim.com.cy","tomer":"tomer.bitterman@mim.com.cy","panagiotis":"panagiotis.christofidis@mim.com.cy","elena":"elena.christodoulou@mim.com.cy","tzachi":"abou26@gmail.com","gabi":"gabi@dorsel.co.il","andreas":"andreash@ahsgroupltd.com","eyal":"eyal.b@dorsel.co.il","monica":"monica.odysseos@bankofcyprus.com","nicolas":"nicolas.charalambous@eurolife.bankofcyprus.com","christos":"christos.paschopoulos@eurolife.bankofcyprus.com"};
+// Known contacts — first name → email. Used to do targeted Graph search when Jack mentions someone.
+var KNOWN_CONTACTS={
+  "george":"mitsakos@2xm.eu",
+  "lior":"liors@dorsel.co.il",
+  "nir":"nir.l@abultd.com",
+  "michal":"michal.david@il.ey.com",
+  "yolit":"yolits@dorsel.co.il",
+  "david":"david.wood@mim.com.cy",
+  "athina":"athina.christodoulou@mim.com.cy",
+  "tomer":"tomer.bitterman@mim.com.cy",
+  "panagiotis":"panagiotis.christofidis@mim.com.cy",
+  "elena":"elena.christodoulou@mim.com.cy",
+  "tzachi":"abou26@gmail.com",
+  "gabi":"gabi@dorsel.co.il",
+  "andreas":"andreash@ahsgroupltd.com",
+  "eyal":"eyal.b@dorsel.co.il",
+  "monica":"monica.odysseos@bankofcyprus.com",
+  "nicolas":"nicolas.charalambous@eurolife.bankofcyprus.com",
+  "christos":"christos.paschopoulos@eurolife.bankofcyprus.com"
+};
 var stylesProfile=null;
 var token=null, apiKey="", hist=[], busy=false, userName="Iacovos";
 
@@ -246,12 +266,17 @@ function doSignOut(){
 function graphFetch(url, opts){
   opts = opts || {};
   var headers = {Authorization:"Bearer "+token};
+  // ConsistencyLevel: eventual is required for $search and $count on the messages endpoint
   if(opts.consistency) headers["ConsistencyLevel"] = "eventual";
   return fetch("https://graph.microsoft.com/v1.0/"+url,{headers:headers}).then(function(r){return r.json();});
 }
+
+// Search emails using Graph $search (KQL syntax). Supports "from:email", "to:email", "subject:term", or free text.
+// Folder is optional ("inbox", "sentitems", or omit for entire mailbox).
 function searchEmails(query, top, folder){
   top = top || 15;
   var path = folder ? ("me/mailFolders/"+folder+"/messages") : "me/messages";
+  // KQL value must be quoted; encodeURIComponent handles the URL escaping
   var url = path+"?$top="+top+"&$search="+encodeURIComponent('"'+query+'"')+"&$select=subject,from,toRecipients,receivedDateTime,sentDateTime,bodyPreview";
   return graphFetch(url,{consistency:true}).then(function(d){return (d&&d.value)||[];});
 }
@@ -264,23 +289,40 @@ function formatEmailLine(e, isReceived){
   var unread = e.isRead===false ? "[UNREAD] " : "";
   return unread + (e.subject||"(no subject)") + " | " + who + " | " + dateStr + " | " + (e.bodyPreview||"").slice(0,300);
 }
-var TOPIC_STOPWORDS = new Set(["about","please","chase","follow","reply","draft","send","sent","have","should","could","would","tell","look","find","search","from","with","what","when","where","this","that","these","those","they","them","their","need","want","know","give","make","take","your","mine","some","many","much","most","more","less","other","again","also","then","than","only","just","still","very","well","here","there","today","tomorrow","yesterday","week","month","year","time","date","email","mail","inbox","outlook","decision","status","update","check","write","calendar","meeting","invite","invitation","aria","apostille","whether","because","kindly","ever","over","does","done","gets","like","says","said","told","asked","made","next","prev","last","first","ours","theirs","really","actually","probably","maybe","across"]);
+
+// Stopwords for topic-keyword extraction (English + a few generic Greek ones)
+var TOPIC_STOPWORDS = new Set(["about","please","chase","follow","reply","draft","send","sent","have","should","could","would","tell","look","find","search","from","with","what","when","where","this","that","these","those","they","them","their","need","want","know","give","make","take","your","mine","some","many","much","most","more","less","other","again","also","then","than","only","just","still","very","well","here","there","today","tomorrow","yesterday","week","month","year","time","date","email","mail","inbox","outlook","decision","status","update","check","write","calendar","meeting","invite","invitation","aria","please","apostille","whether","because","kindly","ever","over","does","done","gets","like","says","said","told","asked","know","make","made","next","prev","last","first","this","that","mine","ours","theirs","very","really","actually","probably","maybe","across"]);
+
 function getM365Context(txt,cb){
   var lower=txt.toLowerCase();
   var isCalendar=lower.includes("calendar")||lower.includes("meeting")||lower.includes("schedule")||lower.includes("today")||lower.includes("tomorrow")||lower.includes("week")||lower.includes("month")||lower.includes("appointment")||lower.includes("event")||lower.includes("invite")||lower.includes("invitation");
   var promises=[];
+
+  // ALWAYS: top 25 inbox (recent context)
   promises.push(
-    graphFetch("me/mailFolders/inbox/messages?$top=25&$select=subject,from,toRecipients,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc").then(function(d){
+    graphFetch("me/mailFolders/inbox/messages?$top=50&$select=subject,from,toRecipients,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc").then(function(d){
       if(!d.value||d.value.length===0)return "[Outlook Inbox] empty.";
       return "[Outlook Inbox — last "+d.value.length+" emails received]\n"+d.value.map(function(e){return formatEmailLine(e,true);}).join("\n");
     }).catch(function(e){return "[Outlook Inbox] fetch error: "+e.message;})
   );
+
+  // Last-48h emails — guarantees brand-new arrivals (within the past 2 days) are always in context, regardless of inbox volume
+  var fortyEightHoursAgo = new Date(Date.now() - 48*3600*1000).toISOString();
+  promises.push(
+    graphFetch("me/mailFolders/inbox/messages?$top=50&$filter="+encodeURIComponent("receivedDateTime ge "+fortyEightHoursAgo)+"&$select=subject,from,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc").then(function(d){
+      if(!d.value||d.value.length===0)return "[Inbox last 48h] no emails in last 48 hours.";
+      return "[Inbox last 48h — every email received since "+new Date(fortyEightHoursAgo).toLocaleString("en-US",{weekday:"short",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})+", "+d.value.length+" total]\n"+d.value.map(function(e){return formatEmailLine(e,true);}).join("\n");
+    }).catch(function(e){return "[Inbox last 48h] fetch error: "+e.message;})
+  );
+
+  // ALWAYS: top 20 sent items (for chase context)
   promises.push(
     graphFetch("me/mailFolders/sentItems/messages?$top=20&$select=subject,toRecipients,sentDateTime,bodyPreview&$orderby=sentDateTime desc").then(function(d){
       if(!d.value||d.value.length===0)return "[Outlook Sent Items] empty.";
       return "[Outlook Sent Items — last "+d.value.length+" emails Jack sent]\n"+d.value.map(function(e){return formatEmailLine(e,false);}).join("\n");
     }).catch(function(e){return "[Outlook Sent Items] fetch error: "+e.message;})
   );
+
   if(isCalendar){
     var start=new Date();start.setHours(0,0,0,0);
     var end=new Date(start.getTime()+(60*86400000));
@@ -297,13 +339,30 @@ function getM365Context(txt,cb){
       }).catch(function(e){return "[Outlook Calendar] fetch error: "+e.message;})
     );
   }
+
+  // Person-targeted search via $search (KQL). Returns matches across the ENTIRE mailbox, not just recent 25.
   var mentionedContacts = {};
   Object.keys(KNOWN_CONTACTS).forEach(function(name){
     var re = new RegExp("\\b" + name + "\\b","i");
     if(re.test(txt)){ mentionedContacts[name] = KNOWN_CONTACTS[name]; }
   });
+  // Also detect any RAW email address in the user's message — covers senders/recipients not in KNOWN_CONTACTS.
+  // E.g. user says "I got an email from cretudn@gmail.com" → we treat cretudn@gmail.com as a targeted contact.
+  var emailPattern = /\b[\w._%+\-]+@[\w.\-]+\.[A-Za-z]{2,}\b/g;
+  var emailMatches = (txt.match(emailPattern) || []).map(function(e){return e.toLowerCase();});
+  var ownEmail = ACCOUNT.email.toLowerCase();
+  emailMatches.forEach(function(email){
+    if(email===ownEmail) return; // skip Jack's own address
+    // De-dupe against KNOWN_CONTACTS entries
+    var alreadyKnown = Object.keys(mentionedContacts).some(function(k){return mentionedContacts[k].toLowerCase()===email;});
+    if(alreadyKnown) return;
+    // Use the local part of the email as a synthetic "name" key for grouping
+    var key = "unknown:"+email;
+    mentionedContacts[key] = email;
+  });
   Object.keys(mentionedContacts).slice(0,3).forEach(function(name){
     var email = mentionedContacts[name];
+    // Date-ordered $filter on inbox — guarantees the LATEST 30 emails FROM this person across the inbox, sorted newest-first
     var fromInboxFilterUrl = "me/mailFolders/inbox/messages?$top=30&$filter="+encodeURIComponent("from/emailAddress/address eq '"+email+"'")+"&$select=subject,from,toRecipients,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc";
     promises.push(
       graphFetch(fromInboxFilterUrl).then(function(d){
@@ -311,6 +370,7 @@ function getM365Context(txt,cb){
         return "[Targeted: "+name+" ("+email+") — full FROM-history (last "+d.value.length+", newest first, complete inbox)]\n"+d.value.map(function(e){return formatEmailLine(e,true);}).join("\n");
       }).catch(function(e){return "[Targeted-from "+name+"] error: "+e.message;})
     );
+    // Date-ordered $filter on sent items — guarantees the LATEST 30 emails Jack sent TO this person, newest-first
     var sentToFilterUrl = "me/mailFolders/sentItems/messages?$top=30&$filter="+encodeURIComponent("toRecipients/any(r:r/emailAddress/address eq '"+email+"')")+"&$select=subject,toRecipients,sentDateTime,bodyPreview&$orderby=sentDateTime desc";
     promises.push(
       graphFetch(sentToFilterUrl).then(function(d){
@@ -318,6 +378,7 @@ function getM365Context(txt,cb){
         return "[Targeted: "+name+" ("+email+") — full SENT-TO history (last "+d.value.length+", newest first, complete sent items)]\n"+d.value.map(function(e){return formatEmailLine(e,false);}).join("\n");
       }).catch(function(e){return "[Targeted-to "+name+"] error: "+e.message;})
     );
+    // Belt-and-braces: $search "from:email" across the WHOLE mailbox (covers archive folders, sub-folders, anywhere $filter on inbox/sent missed)
     promises.push(
       searchEmails("from:"+email, 25).then(function(emails){
         if(!emails.length)return "";
@@ -331,12 +392,16 @@ function getM365Context(txt,cb){
       }).catch(function(){return "";})
     );
   });
+
+  // Topic-keyword search — pull distinctive words from the user message and search them across the mailbox.
+  // Useful when Jack mentions a topic ("lift", "elevator", "Crocs") that may appear in subjects/bodies.
   var contactNames = new Set(Object.keys(KNOWN_CONTACTS));
   var rawWords = (txt.toLowerCase().match(/\b[a-zα-ω]{4,}\b/gi) || []);
   var topicCandidates = rawWords.filter(function(w){
     var wl = w.toLowerCase();
     return !TOPIC_STOPWORDS.has(wl) && !contactNames.has(wl);
   });
+  // Dedupe + take top 2 most distinctive (longest first as a heuristic)
   var seen = {};
   var uniqueTopics = [];
   topicCandidates.sort(function(a,b){return b.length-a.length;}).forEach(function(w){
@@ -356,13 +421,19 @@ function getM365Context(txt,cb){
       }).catch(function(e){return "[Topic '"+topic+"'] error: "+e.message;})
     );
   });
+
   if(promises.length===0){cb("");return;}
   Promise.all(promises).then(function(results){cb("LIVE M365 DATA:\n\n"+results.join("\n\n"));}).catch(function(){cb("");});
 }
+
+// === EMAIL SENDING ===
+// === STYLES PROFILE (built from Jack's real sent emails — drives all email drafts) ===
 function loadStyles(){
   if(stylesProfile) return Promise.resolve(stylesProfile);
   return fetch(STYLES_URL,{cache:'no-cache'}).then(function(r){return r.json();}).then(function(j){stylesProfile=j; return j;}).catch(function(e){console.error('Failed to load styles.json',e); return null;});
 }
+
+// Recipient classifier — exact 4-category logic per styles.json contract
 function classifyRecipients(toList, ccList){
   var to = (toList||[]).map(function(e){return String(e).toLowerCase().trim();});
   var cc = (ccList||[]).map(function(e){return String(e).toLowerCase().trim();});
@@ -370,14 +441,20 @@ function classifyRecipients(toList, ccList){
   if(all.length===0) return 'external';
   var endsInternal = function(e){return e.lastIndexOf(INTERNAL_DOMAIN) === e.length - INTERNAL_DOMAIN.length;};
   var external = all.filter(function(e){return !endsInternal(e);});
+  // Rule 1: inner_circle — external recipients are EXCLUSIVELY Lior and/or Nir
   if(external.length>0 && external.every(function(e){return INNER_CIRCLE_SET.indexOf(e)>=0;})){
     return 'inner_circle';
   }
+  // Rule 2: board — 3 or more board addresses on the To line
   var boardOnTo = to.filter(function(e){return BOARD_FULL_TO.indexOf(e)>=0;});
   if(boardOnTo.length>=3) return 'board';
+  // Rule 3: internal — every recipient is on @mim.com.cy
   if(all.every(endsInternal)) return 'internal';
+  // Rule 4: default
   return 'external';
 }
+
+// Expand the "BOARD_FULL" shortcut into actual addresses
 function resolveBoardShortcut(args){
   var hasShortcut = args.to.some(function(t){var v=String(t).toLowerCase(); return v==='board_full'||v==='board'||v==='full board'||v==='bod'||v==='full bod';});
   if(hasShortcut){
@@ -386,6 +463,7 @@ function resolveBoardShortcut(args){
   }
   return args;
 }
+
 function buildDraftPrompt(req){
   return loadStyles().then(function(styles){
     if(!styles) return null;
@@ -450,6 +528,7 @@ function buildDraftPrompt(req){
     return {prompt: prompt, category: category};
   });
 }
+
 function generateDraft(req){
   return buildDraftPrompt(req).then(function(result){
     if(!result) return Promise.reject(new Error('Could not load styles.json'));
@@ -471,6 +550,7 @@ function generateDraft(req){
     });
   });
 }
+
 function parseDraftRequest(text){
   var re = /DRAFT_REQUEST:\s*(\{[\s\S]*?\})\s*$/m;
   var m = text.match(re);
@@ -485,10 +565,13 @@ function parseDraftRequest(text){
     return {raw: m[0], args: args};
   }catch(e){return null;}
 }
+
+// Convert plain text body to HTML for the Make.com email module (which renders contentType: html)
 function ensureHtmlBody(body){
   if(/<\w+[^>]*>/.test(body)) return body;
   return body.split(/\n\n+/).map(function(p){return '<p>' + p.replace(/\n/g, '<br>') + '</p>';}).join('');
 }
+
 function sendOutlookEmail(to, subject, body, cc){
   var payload = { to: to, subject: subject, body: ensureHtmlBody(body) };
   if(cc) payload.cc = cc;
@@ -500,6 +583,10 @@ function sendOutlookEmail(to, subject, body, cc){
     return r.text().then(function(t){return {ok:r.ok,status:r.status,info:t||"(empty body)"};});
   }).catch(function(e){return {ok:false,status:0,info:e.message};});
 }
+
+// === CALENDAR INVITE ===
+// Posts {action:"send_invite", subject, startDateTime, endDateTime, attendees:[{address}], location, body}
+// to the Calendar webhook, which forwards to Microsoft Graph create event under iacovos.mylonas@mim.com.cy.
 function sendOutlookCalendarInvite(args){
   var payload = {
     action: "send_invite",
@@ -518,6 +605,8 @@ function sendOutlookCalendarInvite(args){
     return r.text().then(function(t){return {ok:r.ok,status:r.status,info:t||"(empty body)"};});
   }).catch(function(e){return {ok:false,status:0,info:e.message};});
 }
+
+// Parse a SEND_EMAIL: { ... } directive out of an assistant reply.
 function parseSendDirective(text){
   var re=/SEND_EMAIL:\s*(\{[\s\S]*?\})\s*$/m;
   var m=text.match(re);
@@ -529,6 +618,8 @@ function parseSendDirective(text){
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
+
+// Parse a SEND_INVITE: { ... } directive out of an assistant reply.
 function parseSendInviteDirective(text){
   var re=/SEND_INVITE:\s*(\{[\s\S]*?\})\s*$/m;
   var m=text.match(re);
@@ -536,6 +627,7 @@ function parseSendInviteDirective(text){
   try{
     var args=JSON.parse(m[1]);
     if(!args.subject||!args.startDateTime||!args.endDateTime||!args.attendees||!args.attendees.length)return null;
+    // Normalise attendees: accept array of strings or array of {address}
     args.attendees = args.attendees.map(function(a){
       if(typeof a==="string")return {address:a};
       if(a&&a.address)return {address:a.address, name:a.name||""};
@@ -545,6 +637,7 @@ function parseSendInviteDirective(text){
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
+
 function sendMsg(){
   var inp=document.getElementById("inp");
   var txt=inp.value.trim();
@@ -555,12 +648,17 @@ function sendMsg(){
   addMsg("u",txt);hist.push({role:"user",content:txt});
   callClaude();
 }
+
+// Cyprus-timezone-aware "now". Independent of the browser's timezone, so the date Aria
+// sees is always the actual local Cyprus date — fixes off-by-one near midnight and
+// stops the model defaulting to its training-cutoff year.
 function cyprusNow(){
   var fmt = new Intl.DateTimeFormat('en-CA',{timeZone:TIMEZONE,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false,weekday:'long'});
   var parts = fmt.formatToParts(new Date());
   var get = function(t){ var p = parts.find(function(x){return x.type===t;}); return p ? p.value : ''; };
   var y=get('year'), m=get('month'), d=get('day'), hh=get('hour'), mm=get('minute'), wk=get('weekday');
   var iso = y+'-'+m+'-'+d;
+  // Compute tomorrow/in-N-days in Cyprus by stepping a UTC anchor and reformatting in TZ
   var anchor = new Date(iso+'T12:00:00Z');
   function plus(days){
     var d2 = new Date(anchor.getTime() + days*86400000);
@@ -570,10 +668,12 @@ function cyprusNow(){
   }
   var tom = plus(1);
   var nextWeek = plus(7);
+  // Human-readable: "Saturday, May 9, 2026"
   var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   var human = wk + ', ' + monthNames[parseInt(m,10)-1] + ' ' + parseInt(d,10) + ', ' + y;
   return {iso:iso, year:y, month:m, day:d, hh:hh, mm:mm, weekday:wk, human:human, tomorrowISO:tom.iso, tomorrowWeekday:tom.weekday, nextWeekISO:nextWeek.iso};
 }
+
 function callClaude(){
   var tid=showTyping();
   var lastUserMsg=null;
@@ -588,13 +688,15 @@ function callClaude(){
       +"The current year is "+now.year+". When Iacovos says \"tomorrow\" he means "+now.tomorrowWeekday+" "+now.tomorrowISO+". When he says \"next week\" anchor to "+now.nextWeekISO+". For any other relative phrase (\"next Monday\", \"in 2 weeks\", \"end of the month\"), compute from TODAY ("+now.iso+") — never default to a different year from your training data.\n\n"
       +"ACCOUNT SCOPE: You are connected to ONE Outlook account: iacovos.mylonas@mim.com.cy (MIM / Tiffany Investment LTD). Do not reference any Gmail address or personal Microsoft account — they are out of scope.\n\n"
       +"=== USE OUTLOOK CONTEXT FIRST — DO NOT ASK FOR INFO THAT IS ALREADY IN HIS INBOX ===\n"
-      +"The LIVE M365 DATA section at the bottom contains FOUR types of pre-fetched results, available on EVERY message:\n"
-      +"  1. Inbox — the last ~25 emails Iacovos received\n"
-      +"  2. Sent Items — the last ~20 emails Iacovos sent\n"
-      +"  3. Targeted person blocks — when Iacovos mentions a known contact's name, the system pulls the LAST 30 emails FROM that person in his inbox + LAST 30 emails Iacovos sent TO them in sent items, ALL date-ordered newest-first, PLUS a full-mailbox $search across any folder. Labelled '[Targeted: <name> ...]'. This is a complete picture of recent correspondence — do NOT claim 'I have no visibility' if these blocks exist.\n"
-      +"  4. Topic-keyword blocks — distinctive words from Iacovos's message (e.g. 'lift', 'elevator', 'invoice') trigger a full-mailbox search. Labelled '[Topic search '<word>' — ...]'.\n\n"
+      +"The LIVE M365 DATA section at the bottom contains FIVE types of pre-fetched results, available on EVERY message:\n"
+      +"  1. Inbox — the last ~50 emails Iacovos received (date-ordered)\n"
+      +"  2. Inbox last 48h — every single email received in the last 48 hours, no count cap. Guarantees brand-new arrivals are visible regardless of volume.\n"
+      +"  3. Sent Items — the last ~20 emails Iacovos sent\n"
+      +"  4. Targeted person blocks — when Iacovos mentions a known contact's name OR any raw email address (e.g. 'cretudn@gmail.com'), the system pulls the LAST 30 emails FROM that person + LAST 30 emails Iacovos sent TO them, all date-ordered newest-first, PLUS a full-mailbox $search. Labelled '[Targeted: <name-or-email> ...]'. ANY email address in his message triggers this — not only KNOWN_CONTACTS.\n"
+      +"  5. Topic-keyword blocks — distinctive words from Iacovos's message (e.g. 'lift', 'elevator', 'Limassol') trigger a full-mailbox $search. Labelled '[Topic search '<word>' — ...]'.\n\n"
+      +"IMPORTANT — $search HAS A 5-15 MIN INDEX LAG for very recent emails. The $filter-based blocks (Inbox, Inbox last 48h, Targeted person date-ordered FROM/TO) DO see new emails immediately. So when Iacovos says he just received an email a few minutes ago, look at Inbox last 48h and the Targeted-person date-ordered blocks FIRST — those will have it. The $search blocks are for older emails.\n\n"
       +"RULES FOR READING THE DATA:\n"
-      +"  - READ EVERY LINE in the targeted person blocks — they're the last 30 emails from that specific person across his entire mailbox, not a 'recent only' window. The relevant email may be from weeks ago.\n"
+      +"  - READ EVERY LINE in the targeted person blocks — they're the last 15 emails from that specific person across his entire mailbox, not a 'recent only' window. The relevant email may be from weeks ago.\n"
       +"  - SOME EMAILS ARE IN GREEK OR GREEKLISH (Cypriot business contacts often write that way). Read them. Greek phrases like 'θα σου απαντήσω' (= 'I'll answer you'), 'Θετική θα είμαστε' (= 'we'll be positive'), 'αύριο' (= 'tomorrow'), 'ευχαριστώ' (= 'thanks') often signal commitments, deferred decisions, or pending replies. Do NOT dismiss non-English emails.\n"
       +"  - When chasing someone, look at the LATEST EMAIL FROM that person AND the LATEST EMAIL Iacovos SENT TO them. If their latest email defers a decision ('I'll answer tomorrow', 'will revert next week', 'let me check and get back'), that IS the chase target — Iacovos is following up because they haven't actually answered yet.\n"
       +"  - Subject lines often carry the topic. If Iacovos says 'lift' but the email subject says 'elevator' or 'KONE' — those are the same topic. Use semantic matching, not just literal keyword.\n"
@@ -653,9 +755,12 @@ function callClaude(){
       var reply="";if(d.content){d.content.forEach(function(b){if(b.type==="text")reply+=b.text;});}
       reply=reply.trim()||(d.error?d.error.message:"Something went wrong.");
       hist.push({role:"assistant",content:reply});
+
+      // Check directives in order: DRAFT_REQUEST → SEND_INVITE → SEND_EMAIL
       var draftReq = parseDraftRequest(reply);
       var inviteDir = draftReq ? null : parseSendInviteDirective(reply);
       var emailDir = (draftReq||inviteDir) ? null : parseSendDirective(reply);
+
       if(draftReq){
         resolveBoardShortcut(draftReq.args);
         var visible=reply.replace(draftReq.raw,"").trim();
@@ -667,6 +772,7 @@ function callClaude(){
           var ccText = draftReq.args.cc.length ? ('\nCC: '+draftReq.args.cc.join(', ')) : '';
           var preview = '**Draft ['+draft.category+']**\n\nTo: '+draftReq.args.to.join(', ')+ccText+'\nSubject: '+draft.subject+'\n\n'+draft.body+'\n\n*Reply "yes" to send, or tell me what to change.*';
           addMsg("a",preview);
+          // Replace the model's DRAFT_REQUEST in hist with the actual draft so it can emit SEND_EMAIL using these exact values on the next turn
           hist[hist.length-1] = {role:'assistant', content: preview};
           busy=false;document.getElementById("sbtn").disabled=false;document.getElementById("inp").focus();
         }).catch(function(e){
@@ -715,6 +821,7 @@ function callClaude(){
     }).catch(function(e){hideTyping(tid);addMsg("a","Error: "+e.message);hist.pop();busy=false;document.getElementById("sbtn").disabled=false;document.getElementById("inp").focus();});
   });
 }
+
 function addMsg(role,text){
   var msgs=document.getElementById("msgs");
   var row=document.createElement("div");
@@ -738,7 +845,7 @@ function showTyping(){var id="ty"+Date.now(),msgs=document.getElementById("msgs"
 function hideTyping(id){var el=document.getElementById(id);if(el)el.remove();}
 window.onload=function(){
   apiKey=localStorage.getItem("aria_key")||"";
-  loadStyles();
+  loadStyles(); // preload so first email draft is fast
   document.getElementById("sbtn").addEventListener("click",sendMsg);
   document.getElementById("inp").addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
   document.getElementById("inp").addEventListener("input",function(){this.style.height="auto";this.style.height=Math.min(this.scrollHeight,100)+"px";});
