@@ -268,25 +268,53 @@ function graphFetch(url, opts){
   var headers = {Authorization:"Bearer "+token};
   // ConsistencyLevel: eventual is required for $search and $count on the messages endpoint
   if(opts.consistency) headers["ConsistencyLevel"] = "eventual";
+  // v1.11: ImmutableId for calendar operations — event IDs that don't change after Outlook modifies the event
+  // (e.g. auto-accept of self-invites). Fixes the "malformed event id" failures Jack hit in v1.10 testing.
+  if(opts.immutableId) headers["Prefer"] = 'IdType="ImmutableId"';
   return fetch("https://graph.microsoft.com/v1.0/"+url,{headers:headers}).then(function(r){return r.json();});
 }
 
 // Generic helper for PATCH / POST / DELETE Graph calls. Used by calendar edit / cancel / delete.
 // Returns {ok, status, body, raw} where body is parsed JSON or null.
-function graphRequest(method, url, body){
+// v1.11: added opts.immutableId — adds Prefer: IdType="ImmutableId" header.
+function graphRequest(method, url, body, opts){
+  opts = opts || {};
   var headers = {Authorization:"Bearer "+token};
-  var opts = {method:method, headers:headers};
+  if(opts.immutableId) headers["Prefer"] = 'IdType="ImmutableId"';
+  var fopts = {method:method, headers:headers};
   if(body){
     headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body);
+    fopts.body = JSON.stringify(body);
   }
-  return fetch("https://graph.microsoft.com/v1.0/"+url, opts).then(function(r){
+  return fetch("https://graph.microsoft.com/v1.0/"+url, fopts).then(function(r){
     return r.text().then(function(t){
       var json = null;
       try{ if(t) json = JSON.parse(t); }catch(e){}
       return {ok:r.ok, status:r.status, body:json, raw:t};
     });
   }).catch(function(e){return {ok:false, status:0, body:null, raw:e.message};});
+}
+
+// v1.11: signature-based event re-lookup. If a PATCH/DELETE/CANCEL fails with "malformed" or 404,
+// we refresh the calendar and try to find the same event by subject + start time, then retry with the
+// fresh ID. This is the second layer of defense in case ImmutableId still doesn't save us.
+function refindEventBySignature(sig){
+  if(!sig || !sig.subject) return Promise.resolve(null);
+  var start = new Date(); start.setHours(0,0,0,0);
+  var end = new Date(start.getTime() + 60*86400000);
+  var url = "me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=100&$select=id,subject,start";
+  return graphFetch(url, {immutableId: true}).then(function(d){
+    if(!d.value) return null;
+    var sigStartTime = new Date(sig.start + (sig.start.endsWith("Z")?"":"Z")).getTime();
+    for(var i=0;i<d.value.length;i++){
+      var e = d.value[i];
+      if(e.subject !== sig.subject) continue;
+      var eStart = new Date(e.start.dateTime + (e.start.dateTime.endsWith("Z")?"":"Z")).getTime();
+      // Allow ±10 minute tolerance for time match
+      if(Math.abs(eStart - sigStartTime) < 10*60*1000) return e.id;
+    }
+    return null;
+  }).catch(function(){return null;});
 }
 
 // Search emails using Graph $search (KQL syntax). Supports "from:email", "to:email", "subject:term", or free text.
@@ -348,13 +376,14 @@ function getM365Context(txt,cb){
   var end=new Date(start.getTime()+(60*86400000));
   var calUrl="me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=id,subject,start,end,location,attendees,organizer,isCancelled&$orderby=start/dateTime asc";
   promises.push(
-    graphFetch(calUrl).then(function(d){
-      // Reset and rebuild the index→eventId map for this turn
+    graphFetch(calUrl, {immutableId: true}).then(function(d){
+      // Reset and rebuild the index→{id, subject, start} map for this turn.
+      // v1.11: store signature so we can re-find the event if its ID becomes stale between fetch and PATCH.
       window._calendarEventMap = {};
       if(!d.value||d.value.length===0)return "[Outlook Calendar] empty for next 60 days. No upcoming events to edit/cancel/delete — only CREATE (SEND_INVITE) is applicable.";
       var lines=d.value.map(function(e,idx){
         var num = idx + 1;
-        window._calendarEventMap[String(num)] = e.id;
+        window._calendarEventMap[String(num)] = {id: e.id, subject: e.subject, start: e.start.dateTime};
         var s=new Date(e.start.dateTime+(e.start.dateTime.endsWith("Z")?"":"Z"));
         var en=new Date(e.end.dateTime+(e.end.dateTime.endsWith("Z")?"":"Z"));
         var atts = (e.attendees||[]).map(function(a){return a.emailAddress?a.emailAddress.address:"";}).filter(Boolean).join(", ");
@@ -613,11 +642,9 @@ function sendOutlookEmail(to, subject, body, cc){
 }
 
 // === CALENDAR CREATE (v1.10+, direct Graph API — was Make webhook in v1.1–v1.9) ===
-// Posts directly to Microsoft Graph POST /me/events. The response includes the new event's `id`
-// immediately, so we never have to guess what Make replied with (which was the v1.9 bug — Make
-// scenario 5648284 has no Webhook Response module so it returned "Accepted" with no JSON).
+// Posts directly to Microsoft Graph POST /me/events with ImmutableId so the returned eventId
+// stays valid even after Outlook modifies the event (e.g. auto-accept of self-invites).
 // Attendees automatically receive meeting invitations via Graph's default behavior.
-// The Make webhook 5648284 is left configured for rollback but no longer called.
 function sendOutlookCalendarInvite(args){
   var event = {
     subject: args.subject,
@@ -629,10 +656,9 @@ function sendOutlookCalendarInvite(args){
       return { emailAddress: { address: a.address, name: a.name || "" }, type: "required" };
     })
   };
-  return graphRequest("POST", "me/events", event).then(function(res){
-    // Normalise response shape to what the caller already expected (ok, status, info, eventId)
+  return graphRequest("POST", "me/events", event, {immutableId: true}).then(function(res){
     if(res.ok && res.body){
-      return {ok: true, status: res.status, info: JSON.stringify(res.body), eventId: res.body.id};
+      return {ok: true, status: res.status, info: JSON.stringify(res.body), eventId: res.body.id, eventBody: res.body};
     }
     var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw || "unknown error");
     return {ok: false, status: res.status, info: errMsg};
@@ -646,16 +672,19 @@ function isValidEventId(id){
   return typeof id === "string" && id.length >= 50 && /^[A-Za-z0-9_\-\/+=]+$/.test(id);
 }
 
-// v1.10: index-based event lookup. Calendar pre-fetch populates this with {N: realEventId}.
+// v1.10: index-based event lookup. Calendar pre-fetch populates this with {N: {id, subject, start}}.
 // Parsers accept either {"event": N} (index lookup) or {"eventId": "AAMk..."} (direct).
+// v1.11: stores full signature so we can re-find the event if its ID becomes stale.
 window._calendarEventMap = {};
 
 // === CALENDAR EDIT / CANCEL / DELETE (v1.8 — direct Graph API, no Make webhook) ===
 // All three need an existing eventId, which the pre-fetched calendar block surfaces.
 
-// PATCH /me/events/{id} — partial update. Any field omitted is left unchanged. Microsoft Graph automatically
-// emails an event-update notification to attendees when the organizer changes time/location/subject.
-// v1.9: verify the change actually applied by inspecting the response body.
+// v1.11: PATCH /me/events/{id} with immutable ID + signature-based retry on failure.
+// Microsoft Graph event IDs can change after Outlook modifies the event (auto-acceptance of self-invites,
+// meeting processing pipeline, etc). Using `Prefer: IdType="ImmutableId"` gives us IDs that don't change.
+// As a second layer of defense, if the PATCH still fails with 400/404, we refresh the calendar and
+// re-find the same event by signature (subject + start time), then retry with the fresh ID.
 function editOutlookCalendarEvent(args){
   var patch = {};
   if(args.subject!=null) patch.subject = args.subject;
@@ -664,37 +693,60 @@ function editOutlookCalendarEvent(args){
   if(args.location!=null) patch.location = {displayName: args.location};
   if(args.body!=null) patch.body = {contentType: "html", content: args.body};
   if(args.attendees && args.attendees.length){
-    // PATCH replaces the entire attendees list — caller must send the COMPLETE new list, not a diff
     patch.attendees = args.attendees.map(function(a){
       return {emailAddress: {address: a.address, name: a.name||""}, type: "required"};
     });
   }
-  return graphRequest("PATCH", "me/events/"+encodeURIComponent(args.eventId), patch).then(function(res){
-    // Verify: response body is the updated event. Sanity-check that the changes we asked for are reflected.
+  var sig = args._signature;
+  function doPatch(eventId){
+    return graphRequest("PATCH", "me/events/"+encodeURIComponent(eventId), patch, {immutableId: true});
+  }
+  function verifyAndReturn(res, finalEventId){
     if(res.ok && res.body){
       res.verified = true;
       var mismatch = [];
       if(args.subject!=null && res.body.subject !== args.subject) mismatch.push("subject");
-      if(args.startDateTime && res.body.start && !res.body.start.dateTime.indexOf(args.startDateTime.slice(0,16))===0) mismatch.push("start");
       if(args.location!=null && res.body.location && res.body.location.displayName !== args.location) mismatch.push("location");
       if(mismatch.length){
         res.verified = false;
         res.warning = "Edit returned 200 but these fields didn't change: "+mismatch.join(", ")+". Verify in Outlook.";
       }
+      res.usedEventId = finalEventId;
+    }
+    return res;
+  }
+  return doPatch(args.eventId).then(function(res){
+    if(res.ok) return verifyAndReturn(res, args.eventId);
+    // First attempt failed. If it's 400/404 and we have a signature, try re-finding the event.
+    if((res.status===400 || res.status===404) && sig){
+      return refindEventBySignature(sig).then(function(freshId){
+        if(!freshId){ res.warning = "Initial PATCH failed (HTTP "+res.status+") and signature re-lookup also failed."; return res; }
+        if(freshId === args.eventId){ res.warning = "Re-lookup returned same ID — Graph genuinely rejects it. Original error: "+(res.body && res.body.error ? res.body.error.message : res.raw); return res; }
+        // Retry with fresh ID
+        return doPatch(freshId).then(function(res2){
+          if(res2.ok){
+            res2.recovered = true;
+            res2.warning = "Initial PATCH failed (HTTP "+res.status+") but recovered by re-finding the event via signature lookup.";
+            return verifyAndReturn(res2, freshId);
+          }
+          return res2;
+        });
+      });
     }
     return res;
   });
 }
 
-// POST /me/events/{id}/cancel — sends a cancellation message to attendees and moves the event to Deleted Items.
-// Use this when the meeting has attendees and you want them notified. Optional Comment is the apology/note.
-// v1.9: post-cancel GET to confirm the event is actually gone or marked cancelled.
+// v1.11: POST /me/events/{id}/cancel with immutable ID + signature retry on failure.
 function cancelOutlookCalendarEvent(args){
   var body = args.comment ? {Comment: args.comment} : {};
-  return graphRequest("POST", "me/events/"+encodeURIComponent(args.eventId)+"/cancel", body).then(function(res){
+  var sig = args._signature;
+  function doCancel(eventId){
+    return graphRequest("POST", "me/events/"+encodeURIComponent(eventId)+"/cancel", body, {immutableId: true});
+  }
+  function verifyCancel(res, eventId){
     if(!res.ok) return res;
-    // Verify by GET. Graph cancel is async: event may be 404 (moved to Deleted Items) or 200 with isCancelled=true.
-    return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId)).then(function(verify){
+    return graphRequest("GET", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true}).then(function(verify){
       if(verify.status === 404){
         res.actuallyCancelled = true;
         res.verifyDetail = "event no longer exists in calendar (moved to Deleted Items)";
@@ -703,35 +755,61 @@ function cancelOutlookCalendarEvent(args){
         res.verifyDetail = "event marked isCancelled=true";
       }else if(verify.body){
         res.actuallyCancelled = false;
-        res.warning = "Cancel HTTP "+res.status+" returned but verification GET shows event still active (isCancelled=false). Graph may be processing async — recheck in 30s. If still there, the cancel didn't take.";
+        res.warning = "Cancel HTTP "+res.status+" returned but verification GET shows event still active. Graph may be processing async — recheck in 30s.";
       }else{
-        // Verify GET failed for other reasons — fall back to trusting HTTP status
         res.actuallyCancelled = true;
         res.verifyDetail = "could not verify (GET status "+verify.status+") — relying on initial HTTP "+res.status;
       }
       return res;
     });
+  }
+  return doCancel(args.eventId).then(function(res){
+    if(res.ok) return verifyCancel(res, args.eventId);
+    if((res.status===400 || res.status===404) && sig){
+      return refindEventBySignature(sig).then(function(freshId){
+        if(!freshId || freshId === args.eventId) return res;
+        return doCancel(freshId).then(function(res2){
+          if(res2.ok){ res2.recovered = true; res2.warning = "Initial cancel failed but recovered via signature lookup."; return verifyCancel(res2, freshId); }
+          return res2;
+        });
+      });
+    }
+    return res;
   });
 }
 
-// DELETE /me/events/{id} — silent removal, no notice. Use only for events with no attendees, or when
-// Iacovos explicitly says "delete silently / no notice". For meetings with attendees, prefer cancelOutlookCalendarEvent.
-// v1.9: post-delete GET expects 404 (event gone). If GET returns 200, warn that delete didn't actually take.
+// v1.11: DELETE /me/events/{id} with immutable ID + signature retry on failure.
 function deleteOutlookCalendarEvent(args){
-  return graphRequest("DELETE", "me/events/"+encodeURIComponent(args.eventId)).then(function(res){
+  var sig = args._signature;
+  function doDelete(eventId){
+    return graphRequest("DELETE", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true});
+  }
+  function verifyDelete(res, eventId){
     if(!res.ok) return res;
-    // Verify: GET should now 404.
-    return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId)).then(function(verify){
+    return graphRequest("GET", "me/events/"+encodeURIComponent(eventId), null, {immutableId: true}).then(function(verify){
       if(verify.status === 404){
         res.actuallyDeleted = true;
       }else if(verify.body){
         res.actuallyDeleted = false;
-        res.warning = "Delete HTTP "+res.status+" returned but the event is still queryable via Graph (status "+verify.status+"). Either the delete didn't take, or this eventId belonged to a different event than expected. Verify in Outlook and retry if needed.";
+        res.warning = "Delete HTTP "+res.status+" returned but the event is still queryable via Graph (status "+verify.status+"). Either the delete didn't take, or this eventId belonged to a different event than expected.";
       }else{
-        res.actuallyDeleted = true; // GET failed, trust the DELETE response
+        res.actuallyDeleted = true;
       }
       return res;
     });
+  }
+  return doDelete(args.eventId).then(function(res){
+    if(res.ok) return verifyDelete(res, args.eventId);
+    if((res.status===400 || res.status===404) && sig){
+      return refindEventBySignature(sig).then(function(freshId){
+        if(!freshId || freshId === args.eventId) return res;
+        return doDelete(freshId).then(function(res2){
+          if(res2.ok){ res2.recovered = true; res2.warning = "Initial delete failed but recovered via signature lookup."; return verifyDelete(res2, freshId); }
+          return res2;
+        });
+      });
+    }
+    return res;
   });
 }
 
@@ -767,16 +845,24 @@ function parseSendInviteDirective(text){
   }catch(e){return null;}
 }
 
-// v1.10: shared helper — resolve {"event": N} (index from pre-fetch) or {"eventId": "AAMk..."} (direct)
-// into a validated real eventId. Returns null if neither valid.
+// v1.10/v1.11: shared helper — resolve {"event": N} (index from pre-fetch) or {"eventId": "AAMk..."}
+// (direct) into a validated real eventId. Also stashes args._signature (subject + start) so the
+// fallback retry path can re-find the event if Graph rejects the cached ID.
 function resolveEventReference(args){
-  // Index lookup first: model says {"event": 3} → look up the real id from window._calendarEventMap
   if(args.event != null){
     var idx = String(args.event);
-    var fromMap = window._calendarEventMap && window._calendarEventMap[idx];
-    if(fromMap){ args.eventId = fromMap; return true; }
+    var entry = window._calendarEventMap && window._calendarEventMap[idx];
+    if(entry){
+      // v1.11: entry can be either string (legacy) or {id, subject, start} (v1.11+)
+      if(typeof entry === "string"){
+        args.eventId = entry;
+      }else{
+        args.eventId = entry.id;
+        args._signature = {subject: entry.subject, start: entry.start};
+      }
+      return true;
+    }
   }
-  // Direct eventId (used for just-created events whose id came from the [System: ...] message)
   if(args.eventId && isValidEventId(args.eventId)) return true;
   return false;
 }
@@ -1034,17 +1120,20 @@ function callClaude(){
         sendOutlookCalendarInvite(inviteDir.args).then(function(res){
           hideTyping(thinking);
           if(res.ok){
-            // v1.10: direct Graph returns the new event's id immediately and reliably.
-            // Add the new event to window._calendarEventMap at the next available index so
-            // an immediate "reschedule it" / "cancel it" can refer to it via {"event": N}.
+            // v1.10/v1.11: direct Graph returns the new event's ImmutableId. Register the new event
+            // (with full signature for fallback re-lookup) at the next available index in the map.
             var newEventId = res.eventId || null;
             var assignedIndex = null;
             if(newEventId){
               assignedIndex = Object.keys(window._calendarEventMap).length + 1;
               while(window._calendarEventMap[String(assignedIndex)]) assignedIndex++;
-              window._calendarEventMap[String(assignedIndex)] = newEventId;
+              window._calendarEventMap[String(assignedIndex)] = {
+                id: newEventId,
+                subject: inviteDir.args.subject,
+                start: inviteDir.args.startDateTime
+              };
             }
-            var idTail = newEventId ? " The new event is registered as Event "+assignedIndex+" in the calendar event map — for any immediate edit/reschedule/cancel/delete of THIS event in the next message, use {\"event\": "+assignedIndex+"} in your directive. The full eventId is "+newEventId+" if you ever need the direct form." : "";
+            var idTail = newEventId ? " The new event is registered as Event "+assignedIndex+" — for any immediate edit/reschedule/cancel/delete of THIS event in the next message, use {\"event\": "+assignedIndex+"} in your directive. Use this number form, NOT the long eventId." : "";
             addMsg("toolcal","✅ Calendar invite created (HTTP "+res.status+", direct Graph). Event is in your Outlook calendar; attendees will receive the meeting invitation by email shortly.");
             hist.push({role:"user",content:"[System: Calendar invite created successfully via direct Microsoft Graph API. HTTP "+res.status+". Attendees: "+attEmails+"."+idTail+" Confirm to Iacovos in one short sentence.]"});
           }else{
