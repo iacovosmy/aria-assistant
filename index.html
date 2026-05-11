@@ -633,6 +633,7 @@ function sendOutlookCalendarInvite(args){
 
 // PATCH /me/events/{id} — partial update. Any field omitted is left unchanged. Microsoft Graph automatically
 // emails an event-update notification to attendees when the organizer changes time/location/subject.
+// v1.9: verify the change actually applied by inspecting the response body.
 function editOutlookCalendarEvent(args){
   var patch = {};
   if(args.subject!=null) patch.subject = args.subject;
@@ -646,20 +647,70 @@ function editOutlookCalendarEvent(args){
       return {emailAddress: {address: a.address, name: a.name||""}, type: "required"};
     });
   }
-  return graphRequest("PATCH", "me/events/"+encodeURIComponent(args.eventId), patch);
+  return graphRequest("PATCH", "me/events/"+encodeURIComponent(args.eventId), patch).then(function(res){
+    // Verify: response body is the updated event. Sanity-check that the changes we asked for are reflected.
+    if(res.ok && res.body){
+      res.verified = true;
+      var mismatch = [];
+      if(args.subject!=null && res.body.subject !== args.subject) mismatch.push("subject");
+      if(args.startDateTime && res.body.start && !res.body.start.dateTime.indexOf(args.startDateTime.slice(0,16))===0) mismatch.push("start");
+      if(args.location!=null && res.body.location && res.body.location.displayName !== args.location) mismatch.push("location");
+      if(mismatch.length){
+        res.verified = false;
+        res.warning = "Edit returned 200 but these fields didn't change: "+mismatch.join(", ")+". Verify in Outlook.";
+      }
+    }
+    return res;
+  });
 }
 
 // POST /me/events/{id}/cancel — sends a cancellation message to attendees and moves the event to Deleted Items.
 // Use this when the meeting has attendees and you want them notified. Optional Comment is the apology/note.
+// v1.9: post-cancel GET to confirm the event is actually gone or marked cancelled.
 function cancelOutlookCalendarEvent(args){
   var body = args.comment ? {Comment: args.comment} : {};
-  return graphRequest("POST", "me/events/"+encodeURIComponent(args.eventId)+"/cancel", body);
+  return graphRequest("POST", "me/events/"+encodeURIComponent(args.eventId)+"/cancel", body).then(function(res){
+    if(!res.ok) return res;
+    // Verify by GET. Graph cancel is async: event may be 404 (moved to Deleted Items) or 200 with isCancelled=true.
+    return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId)).then(function(verify){
+      if(verify.status === 404){
+        res.actuallyCancelled = true;
+        res.verifyDetail = "event no longer exists in calendar (moved to Deleted Items)";
+      }else if(verify.body && verify.body.isCancelled){
+        res.actuallyCancelled = true;
+        res.verifyDetail = "event marked isCancelled=true";
+      }else if(verify.body){
+        res.actuallyCancelled = false;
+        res.warning = "Cancel HTTP "+res.status+" returned but verification GET shows event still active (isCancelled=false). Graph may be processing async — recheck in 30s. If still there, the cancel didn't take.";
+      }else{
+        // Verify GET failed for other reasons — fall back to trusting HTTP status
+        res.actuallyCancelled = true;
+        res.verifyDetail = "could not verify (GET status "+verify.status+") — relying on initial HTTP "+res.status;
+      }
+      return res;
+    });
+  });
 }
 
 // DELETE /me/events/{id} — silent removal, no notice. Use only for events with no attendees, or when
 // Iacovos explicitly says "delete silently / no notice". For meetings with attendees, prefer cancelOutlookCalendarEvent.
+// v1.9: post-delete GET expects 404 (event gone). If GET returns 200, warn that delete didn't actually take.
 function deleteOutlookCalendarEvent(args){
-  return graphRequest("DELETE", "me/events/"+encodeURIComponent(args.eventId));
+  return graphRequest("DELETE", "me/events/"+encodeURIComponent(args.eventId)).then(function(res){
+    if(!res.ok) return res;
+    // Verify: GET should now 404.
+    return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId)).then(function(verify){
+      if(verify.status === 404){
+        res.actuallyDeleted = true;
+      }else if(verify.body){
+        res.actuallyDeleted = false;
+        res.warning = "Delete HTTP "+res.status+" returned but the event is still queryable via Graph (status "+verify.status+"). Either the delete didn't take, or this eventId belonged to a different event than expected. Verify in Outlook and retry if needed.";
+      }else{
+        res.actuallyDeleted = true; // GET failed, trust the DELETE response
+      }
+      return res;
+    });
+  });
 }
 
 // Parse a SEND_EMAIL: { ... } directive out of an assistant reply.
@@ -828,7 +879,21 @@ function callClaude(){
       +"- Invent a different subject/body in SEND_EMAIL than what was shown in the draft preview.\n"
       +"- Mix DRAFT_REQUEST with other text in the same response — emit it on its own.\n"
       +"- Refuse with \"I cannot send emails\". You can. Use the protocol.\n\n"
-      +"=== YOU CAN SEND CALENDAR INVITES — DO NOT REFUSE ===\n"
+      +"=== CALENDAR — DECIDE THE OPERATION BEFORE ACTING (v1.9) ===\n"
+      +"When Iacovos mentions a calendar event, FIRST decide which of the four operations he wants. Read his exact wording — do not pattern-match on the word 'calendar' alone:\n\n"
+      +"  • CREATE (SEND_INVITE) — only when he says: 'set up', 'schedule', 'book', 'create', 'arrange', 'put a meeting', 'new meeting'. The event does NOT exist yet.\n"
+      +"  • EDIT (EDIT_INVITE) — when he says: 'reschedule', 'move', 'change the time', 'postpone', 'push', 'shift', 'edit', 'modify', 'update [field]', 'add [person] to', 'remove [person] from'. The event ALREADY EXISTS.\n"
+      +"  • CANCEL (CANCEL_INVITE) — when he says: 'cancel', 'call off', 'scratch', 'drop', and the event has attendees who should be notified.\n"
+      +"  • DELETE (DELETE_INVITE) — when he says: 'delete silently', 'remove without notice', or for a personal blocker / hold with NO attendees. Or when he explicitly says 'delete, don't send anything'.\n\n"
+      +"CRITICAL RULES — VIOLATIONS CAUSED REAL BUGS THAT REACHED IACOVOS, DO NOT REPEAT THEM:\n"
+      +"  1. 'Reschedule' / 'move' NEVER means CREATE. It means EDIT. If you emit SEND_INVITE in response to a reschedule, you will create a DUPLICATE event and the original will still be there.\n"
+      +"  2. Before emitting EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE, you MUST identify the target event. Two valid sources for the eventId:\n"
+      +"     (a) The [Outlook Calendar - ...] pre-fetch block — every line ends with 'eventId: AAMk...'. Find the line whose subject/date/attendees match what Iacovos described.\n"
+      +"     (b) A prior [System: ...] message in this conversation where you JUST created an event — it tells you the new event's eventId. Use this for immediate 'reschedule it' / 'cancel it' follow-ups within the same conversation, because the pre-fetch may not have caught up yet (Graph indexing lag is a few seconds).\n"
+      +"  3. If you can NOT find a matching event in either source — STOP. Tell Iacovos: 'I don't see that event in my calendar pre-fetch yet — could you give me more details (date, time, subject) or wait ~30 seconds for it to sync?' DO NOT guess an eventId. DO NOT emit SEND_INVITE as a fallback for an EDIT/CANCEL/DELETE request.\n"
+      +"  4. When you DO find the target, ALWAYS quote it back to Iacovos in the confirmation prompt — subject + date/time + attendees AND a short prefix of the eventId (first ~20 chars) — so he can spot if you picked the wrong event. Example: 'I'll move \"Test self-meeting\" (May 12, 10:00am, eventId AAMkAGI1AAAt9A…) to 11:00am. Confirm with yes?'\n"
+      +"  5. Two-step confirm protocol applies to ALL FOUR operations. Step 1: show intent + ask 'yes?'. Step 2 (only after explicit confirmation): emit the directive on its OWN LINE with nothing else.\n\n"
+      +"=== YOU CAN CREATE CALENDAR INVITES — DO NOT REFUSE ===\n"
       +"You CAN create calendar events with attendees in Iacovos's Outlook calendar on demand. The event is created in his calendar AND meeting invitations are emailed to all attendees. This is verified working. If you find yourself about to say \"I cannot create calendar events\" or similar — STOP. You have a working tool.\n\n"
       +"To send a calendar / meeting invitation, follow this exact two-step protocol:\n"
       +"  Step 1 (always first): Show Iacovos a draft — subject, date and time (in his "+TIMEZONE+" timezone, in human-friendly form e.g. \"Friday May 15, 2026, 2:00pm – 3:00pm\"), attendees (full email addresses), location (optional), and body/agenda (optional). Ask him to confirm with \"yes\" / \"send\" / \"go\". Do not send anything yet.\n"
@@ -912,8 +977,16 @@ function callClaude(){
         sendOutlookCalendarInvite(inviteDir.args).then(function(res){
           hideTyping(thinking);
           if(res.ok){
+            // v1.9: extract the new event's id from the Make webhook response so subsequent EDIT/CANCEL/DELETE
+            // requests in the same conversation don't have to wait for the calendar pre-fetch to catch up.
+            var newEventId = null;
+            try{
+              var parsed = JSON.parse(res.info);
+              newEventId = parsed.id || (parsed.body && parsed.body.id) || (parsed.event && parsed.event.id) || null;
+            }catch(e){}
+            var idTail = newEventId ? " The new event's eventId is "+newEventId+" — remember it in case Iacovos asks to edit/reschedule/cancel/delete THIS event in the next message." : " (The Make webhook response did not include an eventId; if Iacovos asks to immediately edit this event, ask him to wait ~30s for the calendar pre-fetch to refresh, then retry.)";
             addMsg("toolcal","✅ Calendar invite created and sent (HTTP "+res.status+"). The event is in your Outlook calendar; attendees will receive the meeting invitation by email shortly.");
-            hist.push({role:"user",content:"[System: Calendar invite created and sent successfully via Make webhook. HTTP "+res.status+". Attendees: "+attEmails+". Confirm to Iacovos in one short sentence.]"});
+            hist.push({role:"user",content:"[System: Calendar invite created and sent successfully via Make webhook. HTTP "+res.status+". Attendees: "+attEmails+"."+idTail+" Confirm to Iacovos in one short sentence.]"});
           }else{
             addMsg("toolcal","❌ Calendar invite failed (HTTP "+res.status+"): "+res.info);
             hist.push({role:"user",content:"[System: Calendar invite FAILED. HTTP "+res.status+". Error: "+res.info+". Tell Iacovos honestly that the invite did not go out.]"});
@@ -928,13 +1001,16 @@ function callClaude(){
         var thinking=showTyping();
         editOutlookCalendarEvent(editDir.args).then(function(res){
           hideTyping(thinking);
-          if(res.ok){
-            addMsg("toolcal","✅ Event updated (HTTP "+res.status+"). Attendees will receive an update notification from Outlook.");
-            hist.push({role:"user",content:"[System: Calendar event edited successfully via Graph API. HTTP "+res.status+". Fields changed: "+(changed||"none")+". Confirm to Iacovos in one short sentence what changed.]"});
+          if(res.ok && res.verified !== false){
+            addMsg("toolcal","✅ Event updated (HTTP "+res.status+", verified). Attendees will receive an update notification from Outlook.");
+            hist.push({role:"user",content:"[System: Calendar event edited successfully via Graph API. HTTP "+res.status+". Fields changed: "+(changed||"none")+". Verification: change reflected in response body. Confirm to Iacovos in one short sentence what changed.]"});
+          }else if(res.ok && res.verified === false){
+            addMsg("toolcal","⚠️ Event edit returned 200 but verification shows the change may not have applied. "+(res.warning||""));
+            hist.push({role:"user",content:"[System: Calendar EDIT returned HTTP "+res.status+" but post-edit verification flagged a discrepancy: "+(res.warning||"")+". Tell Iacovos honestly that the edit may not have taken — recommend he opens Outlook to verify and retries if needed.]"});
           }else{
             var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
             addMsg("toolcal","❌ Event edit failed (HTTP "+res.status+"): "+errMsg);
-            hist.push({role:"user",content:"[System: Calendar event EDIT FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly that the edit did not work.]"});
+            hist.push({role:"user",content:"[System: Calendar event EDIT FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly that the edit did not work. If the error mentions the eventId, suggest he ask you to re-list the calendar so you can pick the correct event.]"});
           }
           callClaude();
         });
@@ -945,9 +1021,13 @@ function callClaude(){
         var thinking=showTyping();
         cancelOutlookCalendarEvent(cancelDir.args).then(function(res){
           hideTyping(thinking);
-          if(res.ok){
-            addMsg("toolcal","✅ Event cancelled (HTTP "+res.status+"). Cancellation notice sent to all attendees; event moved to Deleted Items.");
-            hist.push({role:"user",content:"[System: Calendar event cancelled successfully via Graph API. HTTP "+res.status+". Cancellation notice was sent to attendees. Confirm to Iacovos in one short sentence.]"});
+          if(res.ok && res.actuallyCancelled !== false){
+            var verifyTag = res.verifyDetail ? " (verified: "+res.verifyDetail+")" : "";
+            addMsg("toolcal","✅ Event cancelled (HTTP "+res.status+")"+verifyTag+". Cancellation notice sent to all attendees; event moved to Deleted Items.");
+            hist.push({role:"user",content:"[System: Calendar event cancelled successfully via Graph API. HTTP "+res.status+". "+(res.verifyDetail||"")+" Cancellation notice was sent to attendees. Confirm to Iacovos in one short sentence.]"});
+          }else if(res.ok && res.actuallyCancelled === false){
+            addMsg("toolcal","⚠️ Cancel HTTP returned but the event still appears active. "+(res.warning||""));
+            hist.push({role:"user",content:"[System: Calendar CANCEL returned HTTP "+res.status+" but post-cancel verification found the event still active. Warning: "+(res.warning||"")+". Tell Iacovos honestly that the cancel may not have taken — recommend he wait 30s and recheck Outlook, or pick a different eventId if this was the wrong event.]"});
           }else{
             var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
             addMsg("toolcal","❌ Event cancel failed (HTTP "+res.status+"): "+errMsg);
@@ -962,9 +1042,12 @@ function callClaude(){
         var thinking=showTyping();
         deleteOutlookCalendarEvent(deleteDir.args).then(function(res){
           hideTyping(thinking);
-          if(res.ok){
-            addMsg("toolcal","✅ Event deleted (HTTP "+res.status+"). No notification sent to anyone.");
-            hist.push({role:"user",content:"[System: Calendar event deleted silently via Graph API. HTTP "+res.status+". No notice sent. Confirm to Iacovos in one short sentence.]"});
+          if(res.ok && res.actuallyDeleted !== false){
+            addMsg("toolcal","✅ Event deleted (HTTP "+res.status+", verified gone). No notification sent to anyone.");
+            hist.push({role:"user",content:"[System: Calendar event deleted silently via Graph API. HTTP "+res.status+". Verified: event no longer exists in calendar. No notice sent. Confirm to Iacovos in one short sentence.]"});
+          }else if(res.ok && res.actuallyDeleted === false){
+            addMsg("toolcal","⚠️ Delete HTTP "+res.status+" returned but the event is STILL in the calendar. "+(res.warning||""));
+            hist.push({role:"user",content:"[System: Calendar DELETE returned HTTP "+res.status+" BUT post-delete verification GET found the event still exists in Iacovos's calendar. This usually means the eventId pointed to a different event than expected, or there's a sync issue. Tell Iacovos honestly that the deletion did NOT actually remove the event he wanted gone — recommend he ask you to re-list the calendar so you can identify the correct eventId, then retry.]"});
           }else{
             var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
             addMsg("toolcal","❌ Event delete failed (HTTP "+res.status+"): "+errMsg);
