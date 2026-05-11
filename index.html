@@ -271,6 +271,24 @@ function graphFetch(url, opts){
   return fetch("https://graph.microsoft.com/v1.0/"+url,{headers:headers}).then(function(r){return r.json();});
 }
 
+// Generic helper for PATCH / POST / DELETE Graph calls. Used by calendar edit / cancel / delete.
+// Returns {ok, status, body, raw} where body is parsed JSON or null.
+function graphRequest(method, url, body){
+  var headers = {Authorization:"Bearer "+token};
+  var opts = {method:method, headers:headers};
+  if(body){
+    headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  return fetch("https://graph.microsoft.com/v1.0/"+url, opts).then(function(r){
+    return r.text().then(function(t){
+      var json = null;
+      try{ if(t) json = JSON.parse(t); }catch(e){}
+      return {ok:r.ok, status:r.status, body:json, raw:t};
+    });
+  }).catch(function(e){return {ok:false, status:0, body:null, raw:e.message};});
+}
+
 // Search emails using Graph $search (KQL syntax). Supports "from:email", "to:email", "subject:term", or free text.
 // Folder is optional ("inbox", "sentitems", or omit for entire mailbox).
 function searchEmails(query, top, folder){
@@ -326,16 +344,20 @@ function getM365Context(txt,cb){
   if(isCalendar){
     var start=new Date();start.setHours(0,0,0,0);
     var end=new Date(start.getTime()+(60*86400000));
-    var calUrl="me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=subject,start,end,location&$orderby=start/dateTime asc";
+    // v1.8: include id + attendees so model can reference events by eventId for edit/cancel/delete
+    var calUrl="me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=id,subject,start,end,location,attendees,organizer,isCancelled&$orderby=start/dateTime asc";
     promises.push(
       graphFetch(calUrl).then(function(d){
         if(!d.value||d.value.length===0)return "[Outlook Calendar] empty for next 60 days.";
         var lines=d.value.map(function(e){
           var s=new Date(e.start.dateTime+(e.start.dateTime.endsWith("Z")?"":"Z"));
           var en=new Date(e.end.dateTime+(e.end.dateTime.endsWith("Z")?"":"Z"));
-          return s.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})+" "+s.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+en.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+" | "+e.subject+(e.location&&e.location.displayName?" @ "+e.location.displayName:"");
+          var atts = (e.attendees||[]).map(function(a){return a.emailAddress?a.emailAddress.address:"";}).filter(Boolean).join(", ");
+          var attsLabel = atts ? " | attendees: "+atts : " | no attendees";
+          var cancelledLabel = e.isCancelled ? " [CANCELLED]" : "";
+          return s.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})+" "+s.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+en.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+" | "+e.subject+cancelledLabel+(e.location&&e.location.displayName?" @ "+e.location.displayName:"")+attsLabel+" | eventId: "+e.id;
         }).join("\n");
-        return "[Outlook Calendar - "+d.value.length+" events next 60 days]\n"+lines;
+        return "[Outlook Calendar - "+d.value.length+" events next 60 days, with eventId for edit/cancel/delete]\n"+lines;
       }).catch(function(e){return "[Outlook Calendar] fetch error: "+e.message;})
     );
   }
@@ -606,6 +628,40 @@ function sendOutlookCalendarInvite(args){
   }).catch(function(e){return {ok:false,status:0,info:e.message};});
 }
 
+// === CALENDAR EDIT / CANCEL / DELETE (v1.8 — direct Graph API, no Make webhook) ===
+// All three need an existing eventId, which the pre-fetched calendar block surfaces.
+
+// PATCH /me/events/{id} — partial update. Any field omitted is left unchanged. Microsoft Graph automatically
+// emails an event-update notification to attendees when the organizer changes time/location/subject.
+function editOutlookCalendarEvent(args){
+  var patch = {};
+  if(args.subject!=null) patch.subject = args.subject;
+  if(args.startDateTime) patch.start = {dateTime: args.startDateTime, timeZone: TIMEZONE};
+  if(args.endDateTime)   patch.end   = {dateTime: args.endDateTime,   timeZone: TIMEZONE};
+  if(args.location!=null) patch.location = {displayName: args.location};
+  if(args.body!=null) patch.body = {contentType: "html", content: args.body};
+  if(args.attendees && args.attendees.length){
+    // PATCH replaces the entire attendees list — caller must send the COMPLETE new list, not a diff
+    patch.attendees = args.attendees.map(function(a){
+      return {emailAddress: {address: a.address, name: a.name||""}, type: "required"};
+    });
+  }
+  return graphRequest("PATCH", "me/events/"+encodeURIComponent(args.eventId), patch);
+}
+
+// POST /me/events/{id}/cancel — sends a cancellation message to attendees and moves the event to Deleted Items.
+// Use this when the meeting has attendees and you want them notified. Optional Comment is the apology/note.
+function cancelOutlookCalendarEvent(args){
+  var body = args.comment ? {Comment: args.comment} : {};
+  return graphRequest("POST", "me/events/"+encodeURIComponent(args.eventId)+"/cancel", body);
+}
+
+// DELETE /me/events/{id} — silent removal, no notice. Use only for events with no attendees, or when
+// Iacovos explicitly says "delete silently / no notice". For meetings with attendees, prefer cancelOutlookCalendarEvent.
+function deleteOutlookCalendarEvent(args){
+  return graphRequest("DELETE", "me/events/"+encodeURIComponent(args.eventId));
+}
+
 // Parse a SEND_EMAIL: { ... } directive out of an assistant reply.
 function parseSendDirective(text){
   var re=/SEND_EMAIL:\s*(\{[\s\S]*?\})\s*$/m;
@@ -634,6 +690,50 @@ function parseSendInviteDirective(text){
       return null;
     }).filter(Boolean);
     if(!args.attendees.length)return null;
+    return {raw:m[0],args:args};
+  }catch(e){return null;}
+}
+
+// Parse an EDIT_INVITE: { ... } directive out of an assistant reply.
+// Requires eventId. All other fields optional — only the provided ones are patched.
+function parseEditInviteDirective(text){
+  var re=/EDIT_INVITE:\s*(\{[\s\S]*?\})\s*$/m;
+  var m=text.match(re);
+  if(!m)return null;
+  try{
+    var args=JSON.parse(m[1]);
+    if(!args.eventId)return null;
+    if(args.attendees){
+      args.attendees = args.attendees.map(function(a){
+        if(typeof a==="string")return {address:a};
+        if(a&&a.address)return {address:a.address, name:a.name||""};
+        return null;
+      }).filter(Boolean);
+    }
+    return {raw:m[0],args:args};
+  }catch(e){return null;}
+}
+
+// Parse a CANCEL_INVITE: { ... } directive — sends cancellation notice to attendees.
+function parseCancelInviteDirective(text){
+  var re=/CANCEL_INVITE:\s*(\{[\s\S]*?\})\s*$/m;
+  var m=text.match(re);
+  if(!m)return null;
+  try{
+    var args=JSON.parse(m[1]);
+    if(!args.eventId)return null;
+    return {raw:m[0],args:args};
+  }catch(e){return null;}
+}
+
+// Parse a DELETE_INVITE: { ... } directive — silent removal, no notice.
+function parseDeleteInviteDirective(text){
+  var re=/DELETE_INVITE:\s*(\{[\s\S]*?\})\s*$/m;
+  var m=text.match(re);
+  if(!m)return null;
+  try{
+    var args=JSON.parse(m[1]);
+    if(!args.eventId)return null;
     return {raw:m[0],args:args};
   }catch(e){return null;}
 }
@@ -744,6 +844,26 @@ function callClaude(){
       +"  - body: optional HTML string for the meeting description\n"
       +"  - Do not add commentary on the same response — just the SEND_INVITE: line\n"
       +"  - The system will execute the create-event and reply to you with the result; you then summarise the outcome to Iacovos\n\n"
+      +"=== CALENDAR EDIT / CANCEL / DELETE (v1.8+) — full CRUD on existing events ===\n"
+      +"You CAN also edit, cancel, or delete any event in Iacovos's calendar. Each event in the [Outlook Calendar - ...] pre-fetch block is shown with its eventId at the end of the line (after 'eventId: '). To act on an event you need its eventId — find it in the pre-fetch.\n\n"
+      +"If multiple events match Iacovos's description (e.g. \"the meeting with George\" matches 3 events), DO NOT guess — list the matches with their dates and ask which one he means.\n\n"
+      +"Three additional directives, each preceded by the same draft → confirm → directive two-step protocol used by SEND_INVITE:\n\n"
+      +"EDIT_INVITE — partial update of an existing event. Any field omitted is left unchanged. Provide at least eventId. NOTE: if you include 'attendees', it REPLACES the entire attendee list, so you must send the COMPLETE new list. If Iacovos just wants to ADD an attendee, include the existing attendees from the pre-fetch PLUS the new one. Microsoft Graph automatically emails an update notification to attendees when time / subject / location change.\n"
+      +"EDIT_INVITE: {\"eventId\":\"AAMk...\",\"subject\":\"<new subject>\",\"startDateTime\":\"2026-05-15T15:00:00\",\"endDateTime\":\"2026-05-15T16:00:00\",\"location\":\"<new location>\",\"body\":\"<new HTML body>\",\"attendees\":[{\"address\":\"alice@example.com\"},{\"address\":\"bob@example.com\"}]}\n\n"
+      +"CANCEL_INVITE — sends a cancellation notice to attendees and moves the event to Deleted Items. Use this when the meeting has attendees and you want them notified. Optional 'comment' is the apology/note attendees will see.\n"
+      +"CANCEL_INVITE: {\"eventId\":\"AAMk...\",\"comment\":\"Apologies — need to reschedule, will send a new invite this week.\"}\n\n"
+      +"DELETE_INVITE — silent removal, NO notice sent to attendees. Use ONLY for events with no attendees (personal blockers, holds, reminders) or when Iacovos explicitly says \"delete silently / no notice\". If the event has attendees and Iacovos doesn't specify, prefer CANCEL_INVITE.\n"
+      +"DELETE_INVITE: {\"eventId\":\"AAMk...\"}\n\n"
+      +"WHEN TO USE WHICH:\n"
+      +"- \"Move the 3pm to 4pm\" / \"change the subject of the lift meeting\" → EDIT_INVITE (only the fields that change, e.g. just startDateTime + endDateTime for a time move)\n"
+      +"- \"Add Lior to the Crocs meeting tomorrow\" → EDIT_INVITE with the full new attendees list (existing + Lior)\n"
+      +"- \"Cancel the meeting with George\" / \"call off Friday's review\" → CANCEL_INVITE (notice goes out)\n"
+      +"- \"Delete that personal blocker / gym hold / reminder I put in\" → DELETE_INVITE (event has no attendees, silent removal is fine)\n"
+      +"- \"Delete the George meeting, don't send anything\" → DELETE_INVITE (explicit silent intent)\n\n"
+      +"PROTOCOL (same two-step for all three):\n"
+      +"  Step 1: Show Iacovos WHICH event you're about to change/cancel/delete — quote the subject + date/time + attendees from the pre-fetch — and what action you intend. Ask him to confirm with \"yes\" / \"go\". DO NOT emit the directive yet.\n"
+      +"  Step 2 (only after confirmation): emit EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE on its OWN LINE with NOTHING ELSE in the response.\n\n"
+      +"NEVER emit the directive in the same message as the confirmation prompt. Always wait for Iacovos to say yes.\n\n"
       +"For all other tasks (reading email, calendar, summarising, drafting), respond normally.\n\n"
       +(ctx?"USE THIS REAL DATA to answer specifically:\n"+ctx:"");
     fetch("https://api.anthropic.com/v1/messages",{
@@ -756,10 +876,13 @@ function callClaude(){
       reply=reply.trim()||(d.error?d.error.message:"Something went wrong.");
       hist.push({role:"assistant",content:reply});
 
-      // Check directives in order: DRAFT_REQUEST → SEND_INVITE → SEND_EMAIL
+      // Check directives in order: DRAFT_REQUEST → SEND_INVITE → EDIT_INVITE → CANCEL_INVITE → DELETE_INVITE → SEND_EMAIL
       var draftReq = parseDraftRequest(reply);
       var inviteDir = draftReq ? null : parseSendInviteDirective(reply);
-      var emailDir = (draftReq||inviteDir) ? null : parseSendDirective(reply);
+      var editDir = (draftReq||inviteDir) ? null : parseEditInviteDirective(reply);
+      var cancelDir = (draftReq||inviteDir||editDir) ? null : parseCancelInviteDirective(reply);
+      var deleteDir = (draftReq||inviteDir||editDir||cancelDir) ? null : parseDeleteInviteDirective(reply);
+      var emailDir = (draftReq||inviteDir||editDir||cancelDir||deleteDir) ? null : parseSendDirective(reply);
 
       if(draftReq){
         resolveBoardShortcut(draftReq.args);
@@ -794,6 +917,58 @@ function callClaude(){
           }else{
             addMsg("toolcal","❌ Calendar invite failed (HTTP "+res.status+"): "+res.info);
             hist.push({role:"user",content:"[System: Calendar invite FAILED. HTTP "+res.status+". Error: "+res.info+". Tell Iacovos honestly that the invite did not go out.]"});
+          }
+          callClaude();
+        });
+      }else if(editDir){
+        var visible=reply.replace(editDir.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        var changed = Object.keys(editDir.args).filter(function(k){return k!=="eventId";}).join(", ");
+        addMsg("toolcal","Editing event ("+(changed||"no fields specified")+")...");
+        var thinking=showTyping();
+        editOutlookCalendarEvent(editDir.args).then(function(res){
+          hideTyping(thinking);
+          if(res.ok){
+            addMsg("toolcal","✅ Event updated (HTTP "+res.status+"). Attendees will receive an update notification from Outlook.");
+            hist.push({role:"user",content:"[System: Calendar event edited successfully via Graph API. HTTP "+res.status+". Fields changed: "+(changed||"none")+". Confirm to Iacovos in one short sentence what changed.]"});
+          }else{
+            var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
+            addMsg("toolcal","❌ Event edit failed (HTTP "+res.status+"): "+errMsg);
+            hist.push({role:"user",content:"[System: Calendar event EDIT FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly that the edit did not work.]"});
+          }
+          callClaude();
+        });
+      }else if(cancelDir){
+        var visible=reply.replace(cancelDir.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("toolcal","Cancelling event"+(cancelDir.args.comment?" with note to attendees":"")+"...");
+        var thinking=showTyping();
+        cancelOutlookCalendarEvent(cancelDir.args).then(function(res){
+          hideTyping(thinking);
+          if(res.ok){
+            addMsg("toolcal","✅ Event cancelled (HTTP "+res.status+"). Cancellation notice sent to all attendees; event moved to Deleted Items.");
+            hist.push({role:"user",content:"[System: Calendar event cancelled successfully via Graph API. HTTP "+res.status+". Cancellation notice was sent to attendees. Confirm to Iacovos in one short sentence.]"});
+          }else{
+            var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
+            addMsg("toolcal","❌ Event cancel failed (HTTP "+res.status+"): "+errMsg);
+            hist.push({role:"user",content:"[System: Calendar event CANCEL FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly that the cancel did not work.]"});
+          }
+          callClaude();
+        });
+      }else if(deleteDir){
+        var visible=reply.replace(deleteDir.raw,"").trim();
+        if(visible)addMsg("a",visible);
+        addMsg("toolcal","Deleting event (silent, no notice to attendees)...");
+        var thinking=showTyping();
+        deleteOutlookCalendarEvent(deleteDir.args).then(function(res){
+          hideTyping(thinking);
+          if(res.ok){
+            addMsg("toolcal","✅ Event deleted (HTTP "+res.status+"). No notification sent to anyone.");
+            hist.push({role:"user",content:"[System: Calendar event deleted silently via Graph API. HTTP "+res.status+". No notice sent. Confirm to Iacovos in one short sentence.]"});
+          }else{
+            var errMsg = (res.body && res.body.error) ? res.body.error.message : (res.raw||"unknown error");
+            addMsg("toolcal","❌ Event delete failed (HTTP "+res.status+"): "+errMsg);
+            hist.push({role:"user",content:"[System: Calendar event DELETE FAILED. HTTP "+res.status+". Error: "+errMsg+". Tell Iacovos honestly that the delete did not work.]"});
           }
           callClaude();
         });
