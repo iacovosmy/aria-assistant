@@ -665,11 +665,12 @@ function sendOutlookCalendarInvite(args){
   });
 }
 
-// v1.10: validate that an eventId looks like a real Graph event id (long base64-ish string).
-// Real Graph event ids are typically 130+ chars of [A-Za-z0-9_\-/+=]. Reject before sending to Graph
-// so we never hit "malformed event id" errors.
+// v1.13: very permissive eventId validation. Microsoft Graph Immutable IDs can contain '.' as a
+// separator (e.g. "AAA=.AAAAAA..."), which the v1.10 regex rejected — that caused the v1.13 round of
+// "no valid event reference" warnings when Aria emitted a valid immutable id. New check: must be a
+// printable-ASCII string of at least 30 chars (immutable IDs can be shorter than regular IDs).
 function isValidEventId(id){
-  return typeof id === "string" && id.length >= 50 && /^[A-Za-z0-9_\-\/+=]+$/.test(id);
+  return typeof id === "string" && id.length >= 30 && /^[\x21-\x7E]+$/.test(id);
 }
 
 // v1.10: index-based event lookup. Calendar pre-fetch populates this with {N: {id, subject, start}}.
@@ -902,15 +903,14 @@ function parseSendInviteDirective(text){
   }catch(e){return null;}
 }
 
-// v1.10/v1.11: shared helper — resolve {"event": N} (index from pre-fetch) or {"eventId": "AAMk..."}
-// (direct) into a validated real eventId. Also stashes args._signature (subject + start) so the
-// fallback retry path can re-find the event if Graph rejects the cached ID.
+// v1.10/v1.11/v1.13: shared helper — resolve {"event": N} (index from pre-fetch) or {"eventId": ...}
+// (direct) or {"event": "subject-fuzzy"} (v1.13 fallback) into a validated real eventId.
+// Stashes args._signature (subject + start) so fallback retry can re-find the event by signature.
 function resolveEventReference(args){
   if(args.event != null){
     var idx = String(args.event);
     var entry = window._calendarEventMap && window._calendarEventMap[idx];
     if(entry){
-      // v1.11: entry can be either string (legacy) or {id, subject, start} (v1.11+)
       if(typeof entry === "string"){
         args.eventId = entry;
       }else{
@@ -918,6 +918,30 @@ function resolveEventReference(args){
         args._signature = {subject: entry.subject, start: entry.start};
       }
       return true;
+    }
+    // v1.13: subject-fuzzy fallback. If args.event is a non-numeric string (e.g. "Test", "test meeting")
+    // the model may have used the subject instead of the index. Search the map for matching subjects.
+    if(isNaN(parseInt(idx, 10)) && window._calendarEventMap){
+      var needle = idx.toLowerCase().trim();
+      var matches = [];
+      for(var key in window._calendarEventMap){
+        var e = window._calendarEventMap[key];
+        if(typeof e === "object" && e.subject){
+          var sub = e.subject.toLowerCase();
+          if(sub === needle || sub.indexOf(needle) >= 0 || needle.indexOf(sub) >= 0){
+            matches.push(e);
+          }
+        }
+      }
+      if(matches.length === 1){
+        args.eventId = matches[0].id;
+        args._signature = {subject: matches[0].subject, start: matches[0].start};
+        args._matchedBy = "subject-fuzzy";
+        return true;
+      }
+      if(matches.length > 1){
+        args._ambiguous = matches.map(function(m){return {subject: m.subject, start: m.start};});
+      }
     }
   }
   if(args.eventId && isValidEventId(args.eventId)) return true;
@@ -1202,8 +1226,10 @@ function callClaude(){
       }else if(editDir && editDir.malformed){
         var visible=reply.replace(editDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        addMsg("toolcal","⚠️ Can't edit: the eventId you provided isn't valid. Use {\"event\": N} from the calendar pre-fetch instead of copying long IDs.");
-        hist.push({role:"user",content:"[System: Your EDIT_INVITE directive had no resolvable event reference. Either you provided a malformed eventId (Graph event IDs are 100+ chars of base64) or the {\"event\": N} index didn't match the latest calendar pre-fetch. Look at the [Outlook Calendar — ...] block in the LIVE M365 DATA below — it numbers events 1, 2, 3... — and use {\"event\": N} format. Try again or ask Iacovos which event he means.]"});
+        var diag = "(you sent event="+JSON.stringify(editDir.args.event)+", eventId="+JSON.stringify(editDir.args.eventId)+")";
+        var ambig = editDir.args._ambiguous ? (" Multiple events match that subject: "+JSON.stringify(editDir.args._ambiguous)+" — ask Iacovos which one.") : "";
+        addMsg("toolcal","⚠️ Can't edit: no resolvable event. "+diag+ambig);
+        hist.push({role:"user",content:"[System: Your EDIT_INVITE directive could not be resolved to an event. "+diag+ambig+" The calendar pre-fetch numbers events 1, 2, 3... — use {\"event\": N} where N is the number from the pre-fetch. If the calendar is empty for the relevant time range, ask Iacovos for more details. If multiple events matched, ask which one. Do NOT retry blindly.]"});
         callClaude();
       }else if(editDir){
         var visible=reply.replace(editDir.raw,"").trim();
@@ -1229,8 +1255,10 @@ function callClaude(){
       }else if(cancelDir && cancelDir.malformed){
         var visible=reply.replace(cancelDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        addMsg("toolcal","⚠️ Can't cancel: no valid event reference. Use {\"event\": N} from the calendar pre-fetch.");
-        hist.push({role:"user",content:"[System: Your CANCEL_INVITE had no resolvable event reference. Use {\"event\": N} format referring to the numbered events in the [Outlook Calendar — ...] block. Try again or ask Iacovos which event he means.]"});
+        var diagC = "(you sent event="+JSON.stringify(cancelDir.args.event)+", eventId="+JSON.stringify(cancelDir.args.eventId)+")";
+        var ambigC = cancelDir.args._ambiguous ? (" Multiple events match that subject: "+JSON.stringify(cancelDir.args._ambiguous)+" — ask Iacovos which one.") : "";
+        addMsg("toolcal","⚠️ Can't cancel: no resolvable event. "+diagC+ambigC);
+        hist.push({role:"user",content:"[System: Your CANCEL_INVITE could not be resolved to an event. "+diagC+ambigC+" Use {\"event\": N} where N is a number 1, 2, 3 from the [Outlook Calendar — ...] pre-fetch. If the calendar is empty (event already cancelled?), tell Iacovos so. If multiple events matched the subject, ask which one. Do NOT retry blindly.]"});
         callClaude();
       }else if(cancelDir){
         var visible=reply.replace(cancelDir.raw,"").trim();
@@ -1256,8 +1284,10 @@ function callClaude(){
       }else if(deleteDir && deleteDir.malformed){
         var visible=reply.replace(deleteDir.raw,"").trim();
         if(visible)addMsg("a",visible);
-        addMsg("toolcal","⚠️ Can't delete: no valid event reference. Use {\"event\": N} from the calendar pre-fetch.");
-        hist.push({role:"user",content:"[System: Your DELETE_INVITE had no resolvable event reference. Use {\"event\": N} format referring to the numbered events in the [Outlook Calendar — ...] block. Try again or ask Iacovos which event he means.]"});
+        var diagD = "(you sent event="+JSON.stringify(deleteDir.args.event)+", eventId="+JSON.stringify(deleteDir.args.eventId)+")";
+        var ambigD = deleteDir.args._ambiguous ? (" Multiple events match that subject: "+JSON.stringify(deleteDir.args._ambiguous)+" — ask Iacovos which one.") : "";
+        addMsg("toolcal","⚠️ Can't delete: no resolvable event. "+diagD+ambigD);
+        hist.push({role:"user",content:"[System: Your DELETE_INVITE could not be resolved to an event. "+diagD+ambigD+" Use {\"event\": N} where N is a number from the [Outlook Calendar — ...] pre-fetch. If the calendar is empty (event already gone?), tell Iacovos so. Do NOT retry blindly.]"});
         callClaude();
       }else if(deleteDir){
         var visible=reply.replace(deleteDir.raw,"").trim();
