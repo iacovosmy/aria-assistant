@@ -6,6 +6,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="./config.js"></script>
 <title>Aria - Personal AI Assistant</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -130,7 +131,7 @@ h1{font-size:24px;font-weight:700;color:#111;margin-bottom:10px}
   </div>
 </div>
 <script>
-var ACCOUNT = { clientId:"d1a83208-df12-4871-9274-70ec3c030b55", tenant:"fcbd37b4-bfc4-40d1-b0b9-f903d592db82", label:"MIM", email:"iacovos.mylonas@mim.com.cy", color:"#d93025", bg:"#fce8e6" };
+var ACCOUNT = { clientId:(typeof ARIA_CONFIG !== 'undefined' ? ARIA_CONFIG.clientId : "d1a83208-df12-4871-9274-70ec3c030b55"), tenant:"fcbd37b4-bfc4-40d1-b0b9-f903d592db82", label:"MIM", email:"iacovos.mylonas@mim.com.cy", color:"#d93025", bg:"#fce8e6" };
 var SCOPES="User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite.All";
 var REDIRECT=location.origin+location.pathname;
 var SEND_WEBHOOK="https://hook.eu1.make.com/4fxvc3jo8bunqqmp5v14iy55ke91i3ki";
@@ -286,6 +287,9 @@ function graphRequest(method, url, body, opts){
     headers["Content-Type"] = "application/json";
     fopts.body = JSON.stringify(body);
   }
+  if((method === "PATCH" || method === "POST") && url.indexOf("me/events") === 0 && url.indexOf("/cancel") === -1){
+    url += (url.indexOf("?") === -1 ? "?" : "&") + "sendUpdates=all";
+  }
   return fetch("https://graph.microsoft.com/v1.0/"+url, fopts).then(function(r){
     return r.text().then(function(t){
       var json = null;
@@ -356,7 +360,7 @@ function bulkDeleteEvents(events){
 function findResidualBySignature(sig){
   if(!sig || !sig.subject) return Promise.resolve({found: false});
   var start = new Date(); start.setHours(0,0,0,0);
-  var end = new Date(start.getTime() + 60*86400000);
+  var end = new Date(start.getTime() + 180*86400000);
   var url = "me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=200&$select=id,subject,start";
   return graphFetch(url, {immutableId: true}).then(function(d){
     if(!d.value) return {found: false};
@@ -409,7 +413,7 @@ function performDeleteAndCreateFallback(args){
           return {emailAddress: {address: a.address, name: a.name||""}, type: "required"};
         }) : (origBody.attendees || [])
       };
-      return graphRequest("POST", "me/events", newEvent, {immutableId: true}).then(function(createRes){
+      return graphRequest("POST", "me/events?sendUpdates=all", newEvent, {immutableId: true}).then(function(createRes){
         if(createRes.ok && createRes.body){
           // Register the new event in the map at the next index for future references
           var newId = createRes.body.id;
