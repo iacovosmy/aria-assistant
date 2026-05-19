@@ -826,17 +826,38 @@ function editOutlookCalendarEvent(args){
   function doPatch(eventId){
     return graphRequest("PATCH", "me/events/"+encodeURIComponent(eventId), patch, {immutableId: true});
   }
+  function normalizeDateTime(dt){
+    if(!dt) return null;
+    var t = typeof dt === 'string' ? new Date(dt) : new Date(dt.dateTime || dt);
+    return isNaN(t.getTime()) ? null : t.toISOString();
+  }
   function verifyAndReturn(res, finalEventId){
     if(res.ok && res.body){
       res.verified = true;
       var mismatch = [];
       if(args.subject!=null && res.body.subject !== args.subject) mismatch.push("subject");
-      if(args.location!=null && res.body.location && res.body.location.displayName !== args.location) mismatch.push("location");
+      if(args.location!=null && (!res.body.location || res.body.location.displayName !== args.location)) mismatch.push("location");
+      if(args.startDateTime){
+        var actualStart = normalizeDateTime(res.body.start);
+        if(actualStart !== normalizeDateTime(args.startDateTime)) mismatch.push("startDateTime");
+      }
+      if(args.endDateTime){
+        var actualEnd = normalizeDateTime(res.body.end);
+        if(actualEnd !== normalizeDateTime(args.endDateTime)) mismatch.push("endDateTime");
+      }
+      if(args.attendees && args.attendees.length){
+        var actualAttendees = (res.body.attendees||[]).map(function(a){ return a.emailAddress && a.emailAddress.address ? a.emailAddress.address.toLowerCase() : ""; }).sort();
+        var expectedAttendees = args.attendees.map(function(a){ return a.address.toLowerCase(); }).sort();
+        if(actualAttendees.length !== expectedAttendees.length || actualAttendees.join(",") !== expectedAttendees.join(",")) mismatch.push("attendees");
+      }
       if(mismatch.length){
         res.verified = false;
-        res.warning = "Edit returned 200 but these fields didn't change: "+mismatch.join(", ")+". Verify in Outlook.";
+        res.warning = "Edit returned 200 but these fields didn't change or match the requested values: "+mismatch.join(", ")+". Verify in Outlook.";
       }
       res.usedEventId = finalEventId;
+    } else if(res.ok){
+      res.verified = false;
+      res.warning = "Edit returned HTTP "+res.status+" but no response body was available to verify the result. Verify the event in Outlook.";
     }
     return res;
   }
@@ -1432,7 +1453,7 @@ function callClaude(){
         var thinking=showTyping();
         editOutlookCalendarEvent(editDir.args).then(function(res){
           hideTyping(thinking);
-          if(res.ok && res.verified !== false){
+          if(res.ok && res.verified === true){
             var fallbackTag = res.fallbackPath === "delete-create" ? " (via DELETE+CREATE fallback — Graph rejected in-place PATCH)" : "";
             addMsg("toolcal","✅ Event updated (HTTP "+res.status+", verified)"+fallbackTag+". Attendees will receive notification from Outlook.");
             var fallbackNote = res.fallbackPath === "delete-create" ? " Note: this used the DELETE+CREATE fallback because Graph rejected the in-place PATCH with an overlap error. Attendees will receive a cancellation notice (for the old time) and a fresh invitation (for the new time), instead of a single 'event updated' notice." : "";
