@@ -288,7 +288,7 @@ function graphRequest(method, url, body, opts){
     fopts.body = JSON.stringify(body);
   }
   if((method === "PATCH" || method === "POST") && url.indexOf("me/events") === 0 && url.indexOf("/cancel") === -1){
-    url += (url.indexOf("?") === -1 ? "?" : "&") + "sendUpdates=all";
+    url += (url.indexOf("?") === -1 ? "?" : "&") + "sendUpdates=always";
   }
   return fetch("https://graph.microsoft.com/v1.0/"+url, fopts).then(function(r){
     return r.text().then(function(t){
@@ -318,8 +318,9 @@ function refindEventBySignature(sig){
 function findEventsBySignature(subject, startISO){
   if(!subject) return Promise.resolve([]);
   var start = new Date(); start.setHours(0,0,0,0);
+  var sigStart = new Date(start.getTime() - 7*86400000); // look back 7 days to find recently-past events
   var end = new Date(start.getTime() + 60*86400000);
-  var url = "me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=200&$select=id,subject,start";
+  var url = "me/calendarview?startDateTime="+sigStart.toISOString()+"&endDateTime="+end.toISOString()+"&$top=200&$select=id,subject,start";
   return graphFetch(url, {immutableId: true}).then(function(d){
     if(!d.value) return [];
     var needle = subject.toLowerCase().trim();
@@ -413,7 +414,7 @@ function performDeleteAndCreateFallback(args){
           return {emailAddress: {address: a.address, name: a.name||""}, type: "required"};
         }) : (origBody.attendees || [])
       };
-      return graphRequest("POST", "me/events?sendUpdates=all", newEvent, {immutableId: true}).then(function(createRes){
+      return graphRequest("POST", "me/events", newEvent, {immutableId: true}).then(function(createRes){
         if(createRes.ok && createRes.body){
           // Register the new event in the map at the next index for future references
           var newId = createRes.body.id;
@@ -497,17 +498,27 @@ function getM365Context(txt,cb){
   // the user's word choice ("cancel", "move", "delete that one") doesn't include "calendar" or "schedule".
   // Also: events are numbered 1..N for easy referencing — model uses {"event": N} not the long eventId.
   var start=new Date();start.setHours(0,0,0,0);
+  var calStart=new Date(start.getTime()-(7*86400000)); // look back 7 days so recently-past events (e.g. yesterday) stay visible for reschedule/edit
   var end=new Date(start.getTime()+(60*86400000));
-  var calUrl="me/calendarview?startDateTime="+start.toISOString()+"&endDateTime="+end.toISOString()+"&$top=50&$select=id,subject,start,end,location,attendees,organizer,isCancelled&$orderby=start/dateTime asc";
+  var calUrl="me/calendarview?startDateTime="+calStart.toISOString()+"&endDateTime="+end.toISOString()+"&$top=100&$select=id,subject,start,end,location,attendees,organizer,isCancelled&$orderby=start/dateTime asc";
   promises.push(
     graphFetch(calUrl, {immutableId: true}).then(function(d){
       // Reset and rebuild the index→{id, subject, start} map for this turn.
       // v1.11: store signature so we can re-find the event if its ID becomes stale between fetch and PATCH.
+      // v1.17: preserve newly-created event entries that haven't synced to Graph yet so the model can
+      // still reference them by their original index (e.g. {"event": 50}) in the very next message.
+      var oldMap = window._calendarEventMap || {};
       window._calendarEventMap = {};
-      if(!d.value||d.value.length===0)return "[Outlook Calendar] empty for next 60 days. No upcoming events to edit/cancel/delete — only CREATE (SEND_INVITE) is applicable.";
+      if(!d.value||d.value.length===0){
+        // Restore all old entries (Graph returned empty, likely a transient error — keep what we had)
+        Object.keys(oldMap).forEach(function(k){ window._calendarEventMap[k] = oldMap[k]; });
+        return "[Outlook Calendar] empty for past 7 days + next 60 days. No events found to edit/cancel/delete — only CREATE (SEND_INVITE) is applicable.";
+      }
+      var newIds = {};
       var lines=d.value.map(function(e,idx){
         var num = idx + 1;
         window._calendarEventMap[String(num)] = {id: e.id, subject: e.subject, start: e.start.dateTime};
+        newIds[e.id] = true;
         var s=new Date(e.start.dateTime+(e.start.dateTime.endsWith("Z")?"":"Z"));
         var en=new Date(e.end.dateTime+(e.end.dateTime.endsWith("Z")?"":"Z"));
         var atts = (e.attendees||[]).map(function(a){return a.emailAddress?a.emailAddress.address:"";}).filter(Boolean).join(", ");
@@ -517,7 +528,23 @@ function getM365Context(txt,cb){
         var organizerLabel = organizer && organizer.toLowerCase() !== ACCOUNT.email.toLowerCase() ? " | organizer: "+organizer : "";
         return "Event "+num+" — "+s.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})+" "+s.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+"-"+en.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})+" | "+e.subject+cancelledLabel+(e.location&&e.location.displayName?" @ "+e.location.displayName:"")+attsLabel+organizerLabel;
       }).join("\n");
-      return "[Outlook Calendar — "+d.value.length+" events next 60 days. To reference an event in EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE use {\"event\": N} where N is the number below (1, 2, 3...). DO NOT copy long event IDs — use the number.]\n"+lines;
+      // Re-add old entries whose IDs didn't appear in the fresh pre-fetch (Graph sync lag for recently-created events).
+      // If the original slot is already taken by the new pre-fetch, assign a fresh free slot so the entry is
+      // never silently dropped — checkSubjectGuard can still find it by subject and auto-correct the event number.
+      Object.keys(oldMap).forEach(function(k){
+        var entry = oldMap[k];
+        var id = typeof entry === "string" ? entry : (entry && entry.id);
+        if(id && !newIds[id]){
+          var targetKey = k;
+          if(window._calendarEventMap[targetKey]){
+            var n = Object.keys(window._calendarEventMap).length + 1;
+            while(window._calendarEventMap[String(n)]) n++;
+            targetKey = String(n);
+          }
+          window._calendarEventMap[targetKey] = entry;
+        }
+      });
+      return "[Outlook Calendar — "+d.value.length+" events (past 7 days + next 60 days). To reference an event in EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE use {\"event\": N} where N is the number below (1, 2, 3...). DO NOT copy long event IDs — use the number. Events from the past 7 days are included so recently-created events that have already passed can still be rescheduled.]\n"+lines;
     }).catch(function(e){return "[Outlook Calendar] fetch error: "+e.message;})
   );
 
@@ -805,12 +832,46 @@ window._calendarEventMap = {};
 // === CALENDAR EDIT / CANCEL / DELETE (v1.8 — direct Graph API, no Make webhook) ===
 // All three need an existing eventId, which the pre-fetched calendar block surfaces.
 
+// v1.19b: Live subject-guard correction. When _subjectGuard is set but doesn't match the Graph-confirmed
+// subject of the targeted event, search Graph directly for the correct event and swap args.eventId.
+// Uses findEventsBySignature which queries the calendar API — not the in-memory map — so it's reliable
+// even when the map is stale or the event hasn't finished syncing.
+// Returns a Promise<boolean>: true if a correction was made, false if no correction was needed/possible.
+function applySubjectGuardLive(args, confirmedSubject){
+  if(!args._subjectGuard || !confirmedSubject) return Promise.resolve(false);
+  var guard = args._subjectGuard.toLowerCase().trim();
+  var actual = confirmedSubject.toLowerCase().trim();
+  var ok = (guard === actual || actual.indexOf(guard) >= 0 || guard.indexOf(actual) >= 0);
+  if(ok) return Promise.resolve(false);
+  return findEventsBySignature(args._subjectGuard, null).then(function(found){
+    if(found.length >= 1){
+      args.eventId = found[0].id;
+      args._signature = {subject: found[0].subject, start: found[0].start};
+      args._liveSearchCorrected = true;
+      return true;
+    }
+    return false;
+  });
+}
+
 // v1.11: PATCH /me/events/{id} with immutable ID + signature-based retry on failure.
 // Microsoft Graph event IDs can change after Outlook modifies the event (auto-acceptance of self-invites,
 // meeting processing pipeline, etc). Using `Prefer: IdType="ImmutableId"` gives us IDs that don't change.
 // As a second layer of defense, if the PATCH still fails with 400/404, we refresh the calendar and
 // re-find the same event by signature (subject + start time), then retry with the fresh ID.
 function editOutlookCalendarEvent(args){
+  // v1.19b: live subject-guard check — fetch the targeted event from Graph, verify it matches
+  // _subjectGuard, and swap to the correct event via live search if it doesn't.
+  if(args._subjectGuard){
+    return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId), null, {immutableId: true}).then(function(pre){
+      var confirmedSubject = pre.ok && pre.body ? pre.body.subject : null;
+      if(!args._signature && confirmedSubject) args._signature = {subject: confirmedSubject, start: pre.body.start && pre.body.start.dateTime};
+      return applySubjectGuardLive(args, confirmedSubject).then(function(){ return _doEdit(args); });
+    });
+  }
+  return _doEdit(args);
+}
+function _doEdit(args){
   var patch = {};
   if(args.subject!=null) patch.subject = args.subject;
   if(args.startDateTime) patch.start = {dateTime: args.startDateTime, timeZone: TIMEZONE};
@@ -910,14 +971,17 @@ function cancelOutlookCalendarEvent(args){
   // `sig` is populated even when the caller used {"eventId": "..."} (no map signature) — closing the
   // residualSweep-skipped-when-sig-missing gap that caused false ✅ reports in v1.14.
   return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId), null, {immutableId: true}).then(function(preFetch){
+    var confirmedSubject = preFetch.ok && preFetch.body ? preFetch.body.subject : null;
     var sig = args._signature;
-    if(!sig && preFetch.ok && preFetch.body){
-      sig = {
-        subject: preFetch.body.subject,
-        start: preFetch.body.start && preFetch.body.start.dateTime
-      };
+    if(!sig && confirmedSubject){
+      sig = {subject: confirmedSubject, start: preFetch.body.start && preFetch.body.start.dateTime};
     }
-    return runCancelWithSig(args.eventId, sig);
+    // v1.19b: live subject-guard correction before cancelling
+    return applySubjectGuardLive(args, confirmedSubject).then(function(corrected){
+      var eventId = corrected ? args.eventId : args.eventId;
+      var useSig = corrected ? args._signature : sig;
+      return runCancelWithSig(eventId, useSig);
+    });
   });
 
   function runCancelWithSig(eventId, sig){
@@ -1007,16 +1071,16 @@ function cancelOutlookCalendarEvent(args){
 // when the caller used {"eventId": "..."} directly (which doesn't set a map signature). Same gap-fix
 // as cancelOutlookCalendarEvent.
 function deleteOutlookCalendarEvent(args){
-  // v1.15 pre-fetch wrapper — capture signature before delete, then run the existing flow
-  if(!args._signature){
+  // Always pre-fetch when _subjectGuard is set (v1.19b) to verify subject via live Graph call.
+  // Also pre-fetch when _signature is missing (v1.15) to populate it for residual sweep.
+  if(args._subjectGuard || !args._signature){
     return graphRequest("GET", "me/events/"+encodeURIComponent(args.eventId), null, {immutableId: true}).then(function(preFetch){
-      if(preFetch.ok && preFetch.body){
-        args._signature = {
-          subject: preFetch.body.subject,
-          start: preFetch.body.start && preFetch.body.start.dateTime
-        };
+      var confirmedSubject = preFetch.ok && preFetch.body ? preFetch.body.subject : null;
+      if(!args._signature && confirmedSubject){
+        args._signature = {subject: confirmedSubject, start: preFetch.body.start && preFetch.body.start.dateTime};
       }
-      return runDelete(args);
+      // v1.19b: if subject guard doesn't match the actual event, live-search for the correct one
+      return applySubjectGuardLive(args, confirmedSubject).then(function(){ return runDelete(args); });
     });
   }
   return runDelete(args);
@@ -1151,6 +1215,48 @@ function resolveEventReference(args){
   }
   if(args.eventId && isValidEventId(args.eventId)) return true;
   return false;
+}
+
+// v1.19: Subject-guard validator with auto-correction.
+// After resolving {"event": N}, compare args._subjectGuard (the subject the model declared it
+// was targeting) against args._signature.subject (the actual subject of the resolved event).
+// If they don't match, search _calendarEventMap for an entry whose subject DOES match the guard.
+//   • Exactly one candidate found → silently remap args to that event (auto-correct, no error).
+//   • Zero or multiple candidates → return mismatch info so the caller can abort.
+// Returns null if OK (including after auto-correction), or {guardSubject, resolvedSubject, ambiguous?} on failure.
+function checkSubjectGuard(args){
+  if(!args._subjectGuard) return null;
+  var resolved = args._signature && args._signature.subject;
+  if(!resolved) return null;
+  var guard = args._subjectGuard.toLowerCase().trim();
+  var actual = resolved.toLowerCase().trim();
+  // Subject already matches — nothing to do
+  if(guard === actual || actual.indexOf(guard) >= 0 || guard.indexOf(actual) >= 0) return null;
+  // Mismatch: search the map for the event the model actually intended
+  var candidates = [];
+  for(var key in window._calendarEventMap){
+    var e = window._calendarEventMap[key];
+    if(typeof e === "object" && e.subject){
+      var sub = e.subject.toLowerCase();
+      if(sub === guard || sub.indexOf(guard) >= 0 || guard.indexOf(sub) >= 0){
+        candidates.push({key: key, entry: e});
+      }
+    }
+  }
+  if(candidates.length === 1){
+    // Auto-correct: silently remap to the right event
+    args.eventId = candidates[0].entry.id;
+    args._signature = {subject: candidates[0].entry.subject, start: candidates[0].entry.start};
+    args._autoCorrectFrom = args.event;
+    args._autoCorrectTo = candidates[0].key;
+    return null; // resolved OK
+  }
+  // Cannot auto-correct — caller will abort
+  return {
+    guardSubject: args._subjectGuard,
+    resolvedSubject: resolved,
+    ambiguous: candidates.length > 1 ? candidates.map(function(c){return {subject:c.entry.subject,start:c.entry.start};}) : null
+  };
 }
 
 // Parse an EDIT_INVITE: { ... } directive out of an assistant reply.
@@ -1292,6 +1398,7 @@ function callClaude(){
       +"- Refuse with \"I cannot send emails\". You can. Use the protocol.\n\n"
       +"=== CALENDAR — TRUST THE CURRENT PRE-FETCH, NOT YOUR MEMORY (v1.16) ===\n"
       +"BEFORE you respond to any cancel/delete/edit request, look at the [Outlook Calendar — ...] pre-fetch block that was generated FOR THIS MESSAGE. That block is the ground truth — it was just fetched from Microsoft Graph seconds ago.\n\n"
+      +"NOTE: The calendar pre-fetch covers the past 7 days AND the next 60 days, so events from yesterday or earlier this week ARE included and can be rescheduled/edited.\n\n"
       +"If Iacovos says \"delete X event\" or \"cancel X\" and ANY event matching X is visible in the current pre-fetch:\n"
       +"  • You MUST attempt the deletion using {\"event\": N} where N is the index from the pre-fetch.\n"
       +"  • DO NOT say \"I already deleted that earlier\" or \"that event is gone\" — if it's in the pre-fetch, it's NOT gone. Your previous claim was wrong. Acknowledge that and retry the operation.\n"
@@ -1315,12 +1422,15 @@ function callClaude(){
       +"  • LOCATION match: 'my meeting at the office' matches events with location containing 'office'.\n\n"
       +"COMBINE multiple signals when possible — they constrain each other. 'The test meeting with myself tomorrow at 10' should match ONE event with subject=Test AND date=tomorrow AND start=10:00.\n\n"
       +"WHEN MULTIPLE EVENTS MATCH: don't pick blindly. Show Iacovos the candidates and ask which one. Example: 'I see 2 events matching: (Event 1) Test on Mon May 12 10am with iacovos.mylonas@mim.com.cy, and (Event 3) Test on Wed May 14 2pm with Lior. Which one?'\n\n"
-      +"WHEN NO EVENT MATCHES: tell Iacovos honestly — 'I don't see an event matching that in the next 60 days. Could you give me more details (date, exact subject, who's invited)?' DO NOT guess. DO NOT use a similar-but-different event.\n\n"
-      +"=== HOW TO REFER TO AN EVENT IN EDIT/CANCEL/DELETE DIRECTIVES (v1.10) ===\n"
-      +"In your EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE JSON, use {\"event\": N} — the small number from the pre-fetch — NOT the long base64 eventId. The system maps the number to the real id internally. Example:\n"
-      +"  EDIT_INVITE: {\"event\": 3, \"startDateTime\": \"2026-05-12T11:00:00\", \"endDateTime\": \"2026-05-12T12:00:00\"}\n"
-      +"  CANCEL_INVITE: {\"event\": 3, \"comment\": \"Sorry — need to reschedule, will send a new invite this week.\"}\n"
-      +"  DELETE_INVITE: {\"event\": 3}\n\n"
+      +"WHEN NO EVENT MATCHES: tell Iacovos honestly — 'I don't see an event matching that in the past 7 days or next 60 days. Could you give me more details (date, exact subject, who's invited)?' DO NOT guess. DO NOT use a similar-but-different event.\n\n"
+      +"⛔ ABSOLUTE RULE — WRONG-EVENT PREVENTION: Before emitting EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE, you MUST verify that the subject of the event you are targeting matches the subject Iacovos named (even if approximate). If the event in the pre-fetch has a DIFFERENT subject (e.g. Iacovos said 'test' but the event you are about to target is 'Marketing Meeting BI Report'), you MUST STOP and ask Iacovos for clarification. NEVER modify, cancel, or delete an event simply because it happens to be on the same day or in the same time slot — the subject must match. This rule overrides everything else. Violating this rule caused a critical incident where a completely wrong meeting was rescheduled.\n\n"
+      +"=== HOW TO REFER TO AN EVENT IN EDIT/CANCEL/DELETE DIRECTIVES (v1.18) ===\n"
+      +"In your EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE JSON, use {\"event\": N} — the small number from the pre-fetch — NOT the long base64 eventId. The system maps the number to the real id internally.\n\n"
+      +"⚠️ MANDATORY _subjectGuard FIELD: Every EDIT_INVITE / CANCEL_INVITE / DELETE_INVITE MUST include a \"_subjectGuard\" field set to the EXACT current subject of the event you are targeting (copy it verbatim from the current pre-fetch). The system validates this against the resolved event before executing — if it does not match, the operation is REJECTED and you will be told which event you actually targeted. This is the primary safeguard against modifying the wrong event when event numbers shift between turns.\n\n"
+      +"  EDIT_INVITE: {\"event\": 3, \"_subjectGuard\": \"Test Meeting\", \"startDateTime\": \"2026-05-12T11:00:00\", \"endDateTime\": \"2026-05-12T12:00:00\"}\n"
+      +"  CANCEL_INVITE: {\"event\": 3, \"_subjectGuard\": \"Test Meeting\", \"comment\": \"Sorry — need to reschedule, will send a new invite this week.\"}\n"
+      +"  DELETE_INVITE: {\"event\": 3, \"_subjectGuard\": \"Test Meeting\"}\n\n"
+      +"⚠️ RE-VERIFY EVENT NUMBER ON CONFIRMATION TURN: Event numbers in the pre-fetch are rebuilt fresh on EVERY message. When Iacovos confirms with \"yes\", the event number you used in the PREVIOUS turn may now point to a different event. Before emitting the directive, RE-READ the CURRENT [Outlook Calendar] pre-fetch in this message and confirm that Event N still has the same subject. If the number shifted, find the event again by subject+date and use the new number. NEVER blindly reuse a number from a previous turn.\n\n"
       +"USE {\"eventId\": \"AAMk...\"} ONLY when the eventId comes from a [System: ...] message in this same conversation telling you a just-created event's eventId — that's the only case where you have a verified valid id without a number. In that case the [System: ...] message will ALSO give you an event number you can use; prefer the number.\n\n"
       +"NEVER copy a long base64 eventId from somewhere else into a directive. They're easy to mangle (transcription errors) and you'll get a 'malformed event id' error. ALWAYS use the {\"event\": N} number form.\n\n"
       +"=== CONFIRMATION PROTOCOL — applies to ALL FOUR calendar operations ===\n"
@@ -1448,6 +1558,8 @@ function callClaude(){
       }else if(editDir){
         var visible=reply.replace(editDir.raw,"").trim();
         if(visible)addMsg("a",visible);
+        if(editDir.args._liveSearchCorrected) addMsg("toolcal","ℹ️ Auto-corrected via live Graph search: \""+editDir.args._subjectGuard+"\" found and targeted correctly.");
+        else if(editDir.args._autoCorrectFrom != null) addMsg("toolcal","ℹ️ Auto-corrected: event number shifted (was "+editDir.args._autoCorrectFrom+", now "+editDir.args._autoCorrectTo+"). Targeting \""+editDir.args._signature.subject+"\".");
         var changed = Object.keys(editDir.args).filter(function(k){return k!=="eventId" && k!=="event" && k.charAt(0)!=="_";}).join(", ");
         addMsg("toolcal","Editing event ("+(changed||"no fields specified")+")...");
         var thinking=showTyping();
@@ -1479,6 +1591,8 @@ function callClaude(){
       }else if(cancelDir){
         var visible=reply.replace(cancelDir.raw,"").trim();
         if(visible)addMsg("a",visible);
+        if(cancelDir.args._liveSearchCorrected) addMsg("toolcal","ℹ️ Auto-corrected via live Graph search: \""+cancelDir.args._subjectGuard+"\" found and targeted correctly.");
+        else if(cancelDir.args._autoCorrectFrom != null) addMsg("toolcal","ℹ️ Auto-corrected: event number shifted (was "+cancelDir.args._autoCorrectFrom+", now "+cancelDir.args._autoCorrectTo+"). Targeting \""+cancelDir.args._signature.subject+"\".");
         addMsg("toolcal","Cancelling event"+(cancelDir.args.comment?" with note to attendees":"")+" (cancel + delete + verify)...");
         var thinking=showTyping();
         cancelOutlookCalendarEvent(cancelDir.args).then(function(res){
@@ -1508,6 +1622,8 @@ function callClaude(){
       }else if(deleteDir){
         var visible=reply.replace(deleteDir.raw,"").trim();
         if(visible)addMsg("a",visible);
+        if(deleteDir.args._liveSearchCorrected) addMsg("toolcal","ℹ️ Auto-corrected via live Graph search: \""+deleteDir.args._subjectGuard+"\" found and targeted correctly.");
+        else if(deleteDir.args._autoCorrectFrom != null) addMsg("toolcal","ℹ️ Auto-corrected: event number shifted (was "+deleteDir.args._autoCorrectFrom+", now "+deleteDir.args._autoCorrectTo+"). Targeting \""+deleteDir.args._signature.subject+"\".");
         addMsg("toolcal","Deleting event (silent, no notice to attendees)...");
         var thinking=showTyping();
         deleteOutlookCalendarEvent(deleteDir.args).then(function(res){
